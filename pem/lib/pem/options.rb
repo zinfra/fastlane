@@ -8,6 +8,11 @@ module PEM
       user ||= CredentialsManager::AppfileConfig.try_fetch_value(:apple_id)
 
       [
+        FastlaneCore::ConfigItem.new(key: :voip,
+                                     env_name: "PEM_VOIP",
+                                     description: "Renew the certificate for VoIP Services instead Apple Push",
+                                     is_string: false,
+                                     default_value: false),
         FastlaneCore::ConfigItem.new(key: :development,
                                      env_name: "PEM_DEVELOPMENT",
                                      description: "Renew the development push certificate instead of the production one",

@@ -55,7 +55,7 @@ module PEM
         end
 
         x509_certificate = cert.download
-        certificate_type = (PEM.config[:development] ? 'development' : 'production')
+        certificate_type = cert_type #(PEM.config[:development] ? 'development' : 'production')
         filename_base = PEM.config[:pem_name] || "#{certificate_type}_#{PEM.config[:app_identifier]}"
         filename_base = File.basename(filename_base, ".pem") # strip off the .pem if it was provided.
 
@@ -63,7 +63,7 @@ module PEM
         FileUtils.mkdir_p(File.expand_path(output_path))
 
         if PEM.config[:save_private_key]
-          private_key_path = File.join(output_path, "#{filename_base}.pkey")
+          private_key_path = File.join(output_path, "#{filename_base}.key.pem")
           File.write(private_key_path, pkey.to_pem)
           UI.message("Private key: ".green + Pathname.new(private_key_path).realpath.to_s)
         end
@@ -75,17 +75,33 @@ module PEM
           UI.message("p12 certificate: ".green + Pathname.new(p12_cert_path).realpath.to_s)
         end
 
-        x509_cert_path = File.join(output_path, "#{filename_base}.pem")
-        File.write(x509_cert_path, x509_certificate.to_pem + pkey.to_pem)
+        x509_cert_path = File.join(output_path, "#{filename_base}.cert.pem")
+        File.write(x509_cert_path, x509_certificate.to_pem)
         UI.message("PEM: ".green + Pathname.new(x509_cert_path).realpath.to_s)
         return x509_cert_path
       end
 
-      def certificate
-        if PEM.config[:development]
-          Spaceship.certificate.development_push
+      def cert_type
+        if PEM.config[:voip]
+          'voip'
         else
-          Spaceship.certificate.production_push
+          if PEM.config[:development]
+            'development'
+          else
+            'production'
+          end
+        end
+      end
+
+      def certificate
+        if PEM.config[:voip]
+          Spaceship.certificate.voip_push
+        else
+          if PEM.config[:development]
+            Spaceship.certificate.development_push
+          else
+            Spaceship.certificate.production_push
+          end
         end
       end
 
