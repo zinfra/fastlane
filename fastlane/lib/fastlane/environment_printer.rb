@@ -8,7 +8,7 @@ module Fastlane
         env_info.gsub!(sensitive_element, "#########")
       end
 
-      puts env_info
+      puts(env_info)
       UI.important("Take notice that this output may contain sensitive information, or simply information that you don't want to make public.")
       if FastlaneCore::Helper.mac? && UI.interactive? && UI.confirm("🙄  Wow, that's a lot of markdown text... should fastlane put it into your clipboard, so you can easily paste it on GitHub?")
         copy_to_clipboard(env_info)
@@ -50,11 +50,11 @@ module Fastlane
     end
 
     def self.print_loaded_plugins
-      ENV["FASTLANE_ENV_PRINTER"] = "enabled"
       env_output =  "### Loaded fastlane plugins:\n"
       env_output << "\n"
       plugin_manager = Fastlane::PluginManager.new
-      plugin_manager.load_plugins
+      plugin_manager.load_plugins(print_table: false)
+
       if plugin_manager.available_plugins.length <= 0
         env_output << "**No plugins Loaded**\n"
       else
@@ -76,7 +76,7 @@ module Fastlane
           table << "| #{plugin} | #{installed_version} | #{update_status} |\n"
         end
 
-        rendered_table = MarkdownTableFormatter.new table
+        rendered_table = MarkdownTableFormatter.new(table)
         env_output << rendered_table.to_md
       end
 
@@ -119,7 +119,7 @@ module Fastlane
         table << "| #{current_gem.name} | #{current_gem.version} | #{update_status} |\n"
       end
 
-      rendered_table = MarkdownTableFormatter.new table
+      rendered_table = MarkdownTableFormatter.new(table)
       env_output << rendered_table.to_md
 
       env_output << "\n\n"
@@ -138,7 +138,7 @@ module Fastlane
           table << "| #{current_gem.name} | #{current_gem.version} |\n"
         end
       end
-      rendered_table = MarkdownTableFormatter.new table
+      rendered_table = MarkdownTableFormatter.new(table)
 
       env_output << rendered_table.to_md
       env_output << "</details>\n\n"
@@ -169,7 +169,7 @@ module Fastlane
         table << "|-----|---------|----|\n"
         table << env_table
       end
-      rendered_table = MarkdownTableFormatter.new table
+      rendered_table = MarkdownTableFormatter.new(table)
       env_output << rendered_table.to_md
       env_output << "\n\n"
     end
@@ -211,7 +211,7 @@ module Fastlane
         "OS" => os_version,
         "Ruby" => RUBY_VERSION,
         "Bundler?" => Helper.bundler?,
-        "Git" => `git --version`.strip.split("\n").first,
+        "Git" => git_version,
         "Installation Source" => anonymized_path($PROGRAM_NAME),
         "Host" => "#{product} #{version} (#{build})",
         "Ruby Lib Dir" => anonymized_path(RbConfig::CONFIG['libdir']),
@@ -258,7 +258,7 @@ module Fastlane
         env_output << "<summary>`#{fastlane_path}`</summary>\n"
         env_output << "\n"
         env_output << "```ruby\n"
-        env_output <<  File.read(fastlane_path)
+        env_output <<  File.read(fastlane_path, encoding: "utf-8")
         env_output <<  "\n```\n"
         env_output << "</details>"
       else
@@ -272,7 +272,7 @@ module Fastlane
         env_output << "<summary>`#{appfile_path}`</summary>\n"
         env_output << "\n"
         env_output << "```ruby\n"
-        env_output <<  File.read(appfile_path)
+        env_output <<  File.read(appfile_path, encoding: "utf-8")
         env_output <<  "\n```\n"
         env_output << "</details>"
       else
@@ -292,6 +292,12 @@ module Fastlane
     def self.copy_to_clipboard(string)
       require 'open3'
       Open3.popen3('pbcopy') { |input, _, _| input << string }
+    end
+
+    def self.git_version
+      return `git --version`.strip.split("\n").first
+    rescue
+      return "not found"
     end
   end
 end

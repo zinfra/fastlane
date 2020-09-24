@@ -1,3 +1,5 @@
+require_relative 'globals'
+
 module Spaceship
   ##
   # Spaceship::Base is the superclass for models in Apple Developer Portal.
@@ -64,6 +66,9 @@ module Spaceship
         h = @hash.dup
         h.delete(:application)
         h.to_json(*a)
+      rescue JSON::GeneratorError => e
+        puts("Failed to jsonify #{h} (#{a})") if Spaceship::Globals.verbose?
+        raise e
       end
 
       def to_h
@@ -134,8 +139,18 @@ module Spaceship
           @attr_mapping.values.each do |method_name|
             getter = method_name.to_sym
             setter = "#{method_name}=".to_sym
-            remove_method(getter) if public_instance_methods.include?(getter)
-            remove_method(setter) if public_instance_methods.include?(setter)
+
+            # Seems like the `public_instance_methods.include?` doesn't always work
+            # More context https://github.com/fastlane/fastlane/issues/11481
+            # That's why we have the `begin` `rescue` code here
+            begin
+              remove_method(getter) if public_instance_methods.include?(getter)
+            rescue NameError
+            end
+            begin
+              remove_method(setter) if public_instance_methods.include?(setter)
+            rescue NameError
+            end
           end
           include(mapping_module(@attr_mapping))
         else
@@ -191,8 +206,8 @@ module Spaceship
       #   Certificate.factory(attrs)
       #   #=> #<PushCertificate ... >
       #
-      def factory(attrs)
-        self.new(attrs)
+      def factory(attrs, existing_client = nil)
+        self.new(attrs, existing_client)
       end
     end
 
@@ -210,12 +225,12 @@ module Spaceship
     # attributes that are defined by `attr_mapping`
     #
     # Do not override `initialize` in your own models.
-    def initialize(attrs = {})
+    def initialize(attrs = {}, existing_client = nil)
       attrs.each do |key, val|
         self.send("#{key}=", val) if respond_to?("#{key}=")
       end
       self.raw_data = DataHash.new(attrs)
-      @client = self.class.client
+      @client = existing_client || self.class.client
       self.setup
     end
 
@@ -231,7 +246,7 @@ module Spaceship
     # This will store a list of defined attr_accessors to easily access them when inspecting the values
     def self.attr_accessor(*vars)
       @attributes ||= []
-      @attributes.concat vars
+      @attributes.concat(vars)
       super(*vars)
     end
 
@@ -261,12 +276,12 @@ module Spaceship
       tree_root = thread[:inspected_objects].nil?
       thread[:inspected_objects] = Set.new if tree_root
 
-      if thread[:inspected_objects].include? self
+      if thread[:inspected_objects].include?(self)
         # already inspected objects have a default value,
         # let's follow Ruby's convention for circular references
         value = "#<Object ...>"
       else
-        thread[:inspected_objects].add self
+        thread[:inspected_objects].add(self)
         begin
           value = inspect_value
         ensure
@@ -280,7 +295,7 @@ module Spaceship
     def inspect_value
       self.attributes.map do |k|
         v = self.send(k).inspect
-        v.gsub!("\n", "\n\t") # to align nested elements
+        v = v.gsub("\n", "\n\t") # to align nested elements
 
         "\t#{k}=#{v}"
       end.join(", \n")

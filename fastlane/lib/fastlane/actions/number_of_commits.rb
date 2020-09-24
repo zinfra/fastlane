@@ -2,7 +2,7 @@ module Fastlane
   module Actions
     class NumberOfCommitsAction < Action
       def self.is_git?
-        Actions.sh 'git rev-parse HEAD'
+        Actions.sh('git rev-parse HEAD')
         return true
       rescue
         return false
@@ -33,6 +33,10 @@ module Fastlane
         "The total number of all commits in current git branch"
       end
 
+      def self.return_type
+        :int
+      end
+
       def self.available_options
         [
           FastlaneCore::ConfigItem.new(key: :all,
@@ -44,7 +48,7 @@ module Fastlane
       end
 
       def self.details
-        "You can use this action to get the number of commits of this branch. This is useful if you want to set the build number to the number of commits. See `fastlane actions number_of_commits` for more details"
+        "You can use this action to get the number of commits of this branch. This is useful if you want to set the build number to the number of commits. See `fastlane actions number_of_commits` for more details."
       end
 
       def self.authors
@@ -59,7 +63,7 @@ module Fastlane
         [
           'increment_build_number(build_number: number_of_commits)',
           'build_number = number_of_commits(all: true)
-          increment_build_number(build_number: number_of_commits)'
+          increment_build_number(build_number: build_number)'
         ]
       end
 

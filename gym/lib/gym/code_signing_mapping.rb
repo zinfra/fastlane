@@ -1,10 +1,10 @@
 require 'xcodeproj'
 
+require_relative 'module'
+
 module Gym
   class CodeSigningMapping
     attr_accessor :project
-
-    attr_accessor :project_paths
 
     def initialize(project: nil)
       self.project = project
@@ -24,7 +24,7 @@ module Gym
       #   (e.g. coming from `provisioningProfiles` of the `export_options` or from previous match calls)
       # with the secondary hash we just created (or was provided as parameter).
       # Both might include information about what profile to use
-      # This is important as it mght not be clear for the user that they have to call match for each app target
+      # This is important as it might not be clear for the user that they have to call match for each app target
       # before adding this code, we'd only either use whatever we get from match, or what's defined in the Xcode project
       # With the code below, we'll make sure to take the best of it:
       #
@@ -72,34 +72,6 @@ module Gym
       return str.to_s.gsub("-", "").gsub(" ", "").gsub("InHouse", "enterprise").downcase.include?(contains.to_s.gsub("-", "").gsub(" ", "").downcase)
     end
 
-    # Array of paths to all project files
-    # (might be multiple, because of workspaces)
-    def project_paths
-      return @_project_paths if @_project_paths
-      if self.project.workspace?
-        # Find the xcodeproj file, as the information isn't included in the workspace file
-        # We have a reference to the workspace, let's find the xcodeproj file
-        # For some reason the `plist` gem can't parse the content file
-        # so we'll use a regex to find all group references
-
-        workspace_data_path = File.join(self.project.path, "contents.xcworkspacedata")
-        workspace_data = File.read(workspace_data_path)
-        @_project_paths = workspace_data.scan(/\"group:(.*)\"/).collect do |current_match|
-          # It's a relative path from the workspace file
-          File.join(File.expand_path("..", self.project.path), current_match.first)
-        end.find_all do |current_match|
-          # We're not interested in a `Pods` project, as it doesn't contain any relevant
-          # information about code signing
-          !current_match.end_with?("Pods/Pods.xcodeproj")
-        end
-
-        return @_project_paths
-      else
-        # Return the path as an array
-        return @_project_paths = [self.project.path]
-      end
-    end
-
     def test_target?(build_settings)
       return (!build_settings["TEST_TARGET_NAME"].nil? || !build_settings["TEST_HOST"].nil?)
     end
@@ -116,14 +88,42 @@ module Gym
       when "tvOS"
         destination_sdkroot = ["appletvos"]
       end
+
+      # Catalyst projects will always have an "iphoneos" sdkroot
+      # Need to force a same platform when trying to build as macos
+      if Gym.building_mac_catalyst_for_mac?
+        return true
+      end
+
       return destination_sdkroot.include?(sdkroot)
+    end
+
+    def detect_configuration_for_archive
+      extract_from_scheme = lambda do
+        if self.project.workspace?
+          available_schemes = self.project.workspace.schemes.reject { |k, v| v.include?("Pods/Pods.xcodeproj") }
+          project_path = available_schemes[Gym.config[:scheme]]
+        else
+          project_path = self.project.path
+        end
+
+        if project_path
+          scheme_path = File.join(project_path, "xcshareddata", "xcschemes", "#{Gym.config[:scheme]}.xcscheme")
+          Xcodeproj::XCScheme.new(scheme_path).archive_action.build_configuration if File.exist?(scheme_path)
+        end
+      end
+
+      configuration = Gym.config[:configuration]
+      configuration ||= extract_from_scheme.call if Gym.config[:scheme]
+      configuration ||= self.project.default_build_settings(key: "CONFIGURATION")
+      return configuration
     end
 
     def detect_project_profile_mapping
       provisioning_profile_mapping = {}
-      specified_configuration = Gym.config[:configuration] || Gym.project.default_build_settings(key: "CONFIGURATION")
+      specified_configuration = detect_configuration_for_archive
 
-      self.project_paths.each do |project_path|
+      self.project.project_paths.each do |project_path|
         UI.verbose("Parsing project file '#{project_path}' to find selected provisioning profiles")
         UI.verbose("Finding provision profiles for '#{specified_configuration}'") if specified_configuration
 
@@ -137,14 +137,35 @@ module Gym
             target.build_configuration_list.build_configurations.each do |build_configuration|
               current = build_configuration.build_settings
               next if test_target?(current)
-              sdkroot = build_configuration.resolve_build_setting("SDKROOT")
+              sdkroot = build_configuration.resolve_build_setting("SDKROOT", target)
               next unless same_platform?(sdkroot)
               next unless specified_configuration == build_configuration.name
 
-              bundle_identifier = build_configuration.resolve_build_setting("PRODUCT_BUNDLE_IDENTIFIER")
+              # Catalyst apps will have some build settings that will have a configuration
+              # that is specfic for macos so going to do our best to capture those
+              #
+              # There are other platform filters besides "[sdk=macosx*]" that we could use but
+              # this is the default that Xcode will use so this will also be our default
+              sdk_specifier = Gym.building_mac_catalyst_for_mac? ? "[sdk=macosx*]" : ""
+
+              # Look for sdk specific bundle identifier (if set) and fallback to general configuration if none
+              bundle_identifier = build_configuration.resolve_build_setting("PRODUCT_BUNDLE_IDENTIFIER#{sdk_specifier}", target)
+              bundle_identifier ||= build_configuration.resolve_build_setting("PRODUCT_BUNDLE_IDENTIFIER", target)
               next unless bundle_identifier
-              provisioning_profile_specifier = build_configuration.resolve_build_setting("PROVISIONING_PROFILE_SPECIFIER")
-              provisioning_profile_uuid = build_configuration.resolve_build_setting("PROVISIONING_PROFILE")
+
+              # Xcode prefixes "maccatalyst." if building a Catalyst app for mac and
+              # if DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER is set to YES
+              if Gym.building_mac_catalyst_for_mac? && build_configuration.resolve_build_setting("DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER", target) == "YES"
+                bundle_identifier = "maccatalyst.#{bundle_identifier}"
+              end
+
+              # Look for sdk specific provisioning profile specifier (if set) and fallback to general configuration if none
+              provisioning_profile_specifier = build_configuration.resolve_build_setting("PROVISIONING_PROFILE_SPECIFIER#{sdk_specifier}", target)
+              provisioning_profile_specifier ||= build_configuration.resolve_build_setting("PROVISIONING_PROFILE_SPECIFIER", target)
+
+              # Look for sdk specific provisioning profile uuid (if set) and fallback to general configuration if none
+              provisioning_profile_uuid = build_configuration.resolve_build_setting("PROVISIONING_PROFILE#{sdk_specifier}", target)
+              provisioning_profile_uuid ||= build_configuration.resolve_build_setting("PROVISIONING_PROFILE", target)
 
               has_profile_specifier = provisioning_profile_specifier.to_s.length > 0
               has_profile_uuid = provisioning_profile_uuid.to_s.length > 0
@@ -184,5 +205,6 @@ module Gym
 
       return provisioning_profile_mapping
     end
+    # rubocop:enable Metrics/PerceivedComplexity
   end
 end

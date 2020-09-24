@@ -18,12 +18,13 @@ module Supply
       program :description, Supply::DESCRIPTION
       program :help, 'Author', 'Felix Krause <supply@krausefx.com>'
       program :help, 'Website', 'https://fastlane.tools'
-      program :help, 'GitHub', 'https://github.com/fastlane/fastlane/tree/master/supply'
+      program :help, 'Documentation', 'https://docs.fastlane.tools/actions/supply/'
       program :help_formatter, :compact
 
       always_trace!
 
       global_option('--verbose') { FastlaneCore::Globals.verbose = true }
+      global_option('--env STRING[,STRING2]', String, 'Add environment(s) to use with `dotenv`')
 
       command :run do |c|
         c.syntax = 'fastlane supply'
@@ -54,7 +55,7 @@ module Supply
         end
       end
 
-      default_command :run
+      default_command(:run)
 
       run!
     end

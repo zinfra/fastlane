@@ -106,11 +106,20 @@ describe Spaceship::Certificate do
       end
     end
 
+    it 'can create a WebsitePush certificate' do
+      expect(client).to receive(:create_certificate!).with('3T2ZP62QW8', /BEGIN CERTIFICATE REQUEST/, '44V62UZ8L7', false) {
+        JSON.parse(PortalStubbing.adp_read_fixture_file('certificateCreate.certRequest.json'))
+      }
+      csr, pkey = Spaceship::Portal::Certificate.create_certificate_signing_request
+      certificate = Spaceship::Portal::Certificate::WebsitePush.create!(csr: csr, bundle_id: 'web.com.example.one')
+      expect(certificate).to be_instance_of(Spaceship::Portal::Certificate::WebsitePush)
+    end
+
     it 'raises an error if the user wants to create a certificate for a non-existing app' do
       expect do
         csr, pkey = Spaceship::Portal::Certificate.create_certificate_signing_request
         Spaceship::Portal::Certificate::ProductionPush.create!(csr: csr, bundle_id: 'notExisting')
-      end.to raise_error "Could not find app with bundle id 'notExisting'"
+      end.to raise_error("Could not find app with bundle id 'notExisting'")
     end
   end
 end

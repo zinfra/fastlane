@@ -1,3 +1,7 @@
+require 'fastlane_core/device_manager'
+require 'fastlane_core/project'
+require_relative 'module'
+
 module Scan
   # This class detects all kinds of default values
   class DetectValues
@@ -40,6 +44,9 @@ module Scan
 
       coerce_to_array_of_strings(:only_testing)
       coerce_to_array_of_strings(:skip_testing)
+
+      coerce_to_array_of_strings(:only_test_configurations)
+      coerce_to_array_of_strings(:skip_test_configurations)
 
       return config
     end
@@ -104,7 +111,7 @@ module Scan
     def self.detect_simulator(devices, requested_os_type, deployment_target_key, default_device_name, simulator_type_descriptor)
       require 'set'
 
-      deployment_target_version = Scan.project.build_settings(key: deployment_target_key) || '0'
+      deployment_target_version = get_deployment_target_version(deployment_target_key)
 
       simulators = filter_simulators(
         FastlaneCore::DeviceManager.simulators(requested_os_type).tap do |array|
@@ -162,27 +169,33 @@ module Scan
         set_of_simulators.to_a
       end
 
-      default = lambda do
-        UI.error("Couldn't find any matching simulators for '#{devices}' - falling back to default simulator") if (devices || []).count > 0
+      unless Scan.config[:skip_detect_devices]
+        default = lambda do
+          UI.error("Couldn't find any matching simulators for '#{devices}' - falling back to default simulator") if (devices || []).count > 0
 
-        result = Array(
-          simulators
-            .select { |sim| sim.name == default_device_name }
-            .reverse # more efficient, because `simctl` prints higher versions first
-            .sort_by! { |sim| Gem::Version.new(sim.os_version) }
-            .last || simulators.first
-        )
+          result = Array(
+            simulators
+              .select { |sim| sim.name == default_device_name }
+              .reverse # more efficient, because `simctl` prints higher versions first
+              .sort_by! { |sim| Gem::Version.new(sim.os_version) }
+              .last || simulators.first
+          )
 
-        UI.message("Found simulator \"#{result.first.name} (#{result.first.os_version})\"") if result.first
+          UI.message("Found simulator \"#{result.first.name} (#{result.first.os_version})\"") if result.first
 
-        result
+          result
+        end
       end
 
       # grab the first unempty evaluated array
-      Scan.devices = [matches, default].lazy.map { |x|
-        arr = x.call
-        arr unless arr.empty?
-      }.reject(&:nil?).first
+      if default
+        Scan.devices = [matches, default].lazy.map { |x|
+          arr = x.call
+          arr unless arr.empty?
+        }.reject(&:nil?).first
+      else
+        Scan.devices = []
+      end
     end
 
     def self.min_xcode8?
@@ -201,9 +214,14 @@ module Scan
       # building up the destination now
       if Scan.devices && Scan.devices.count > 0
         Scan.config[:destination] = Scan.devices.map { |d| "platform=#{d.os_type} Simulator,id=#{d.udid}" }
-      else
+      elsif Scan.project.mac_app?
         Scan.config[:destination] = min_xcode8? ? ["platform=macOS"] : ["platform=OS X"]
       end
+    end
+
+    # get deployment target version
+    def self.get_deployment_target_version(deployment_target_key)
+      Scan.config[:deployment_target_version] || Scan.project.build_settings(key: deployment_target_key) || '0'
     end
   end
 end

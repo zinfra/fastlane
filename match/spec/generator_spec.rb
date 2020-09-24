@@ -1,6 +1,6 @@
 describe Match::Generator do
-  describe 'calling through to other tools ' do
-    it 'configures cert correctly for nested execution' do
+  describe 'calling through to other tools' do
+    it 'configures cert correctly for nested execution', requires_keychain: true do
       require 'cert'
 
       config = FastlaneCore::Configuration.create(Cert::Options.available_options, {
@@ -9,7 +9,11 @@ describe Match::Generator do
         force: true,
         username: 'username',
         team_id: 'team_id',
-        keychain_path: FastlaneCore::Helper.keychain_path("login.keychain")
+        keychain_path: FastlaneCore::Helper.keychain_path("login.keychain"),
+        keychain_password: 'password',
+        platform: "ios",
+        filename: nil,
+        team_name: nil
       })
 
       # This is the important part. We need to see the right configuration come through
@@ -27,10 +31,11 @@ describe Match::Generator do
         workspace: 'workspace',
         username: 'username',
         team_id: 'team_id',
-        keychain_name: 'login.keychain'
+        keychain_name: 'login.keychain',
+        keychain_password: 'password'
       }
 
-      Match::Generator.generate_certificate(params, 'development')
+      Match::Generator.generate_certificate(params, 'development', "workspace")
     end
 
     it 'configures sigh correctly for nested execution' do
@@ -41,20 +46,21 @@ describe Match::Generator do
         development: true,
         output_path: 'workspace/profiles/development',
         username: 'username',
-        force: true,
+        force: false,
         cert_id: 'fake_cert_id',
         provisioning_name: 'match Development app_identifier',
         ignore_profiles_with_different_name: true,
         team_id: 'team_id',
         platform: :ios,
-        template_name: 'template_name'
+        template_name: 'template_name',
+        fail_on_name_taken: false
       })
 
       # This is the important part. We need to see the right configuration come through
       # for sigh
       expect(Sigh).to receive(:config=).with(a_configuration_matching(config))
 
-      # This just mocks out the usual behavior of running cert, since that's not what
+      # This just mocks out the usual behavior of running sigh, since that's not what
       # we're testing
       allow(Sigh::Manager).to receive(:start).and_return("fake_path")
 
@@ -67,7 +73,7 @@ describe Match::Generator do
         platform: :ios,
         template_name: 'template_name'
       }
-      Match::Generator.generate_provisioning_profile(params: params, prov_type: :development, certificate_id: 'fake_cert_id', app_identifier: params[:app_identifier])
+      Match::Generator.generate_provisioning_profile(params: params, prov_type: :development, certificate_id: 'fake_cert_id', app_identifier: params[:app_identifier], force: false, working_directory: "workspace")
     end
   end
 end

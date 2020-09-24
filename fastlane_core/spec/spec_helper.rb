@@ -8,7 +8,7 @@ end
 def before_each_fastlane_core
   # iTunes Lookup API by Apple ID
   ["invalid", "", 0, '284882215', ['338986109', 'FR']].each do |current|
-    if current.kind_of? Array
+    if current.kind_of?(Array)
       id = current[0]
       country = current[1]
       url = "https://itunes.apple.com/lookup?id=#{id}&country=#{country}"
@@ -31,30 +31,6 @@ def before_each_fastlane_core
   stub_request(:get, "https://itunes.apple.com/lookup?bundleId=net.sunapps.invalid").
     with(headers: { 'Accept' => '*/*', 'Accept-Encoding' => 'gzip;q=1.0,deflate;q=0.6,identity;q=0.3', 'User-Agent' => 'Ruby' }).
     to_return(status: 200, body: File.read("fastlane_core/spec/responses/itunesLookup-net.sunapps.invalid.json"), headers: {})
-end
-
-# Executes the provided block after adjusting the ENV to have the
-# provided keys and values set as defined in hash. After the block
-# completes, restores the ENV to its previous state.
-def with_env_values(hash)
-  old_vals = ENV.select { |k, v| hash.include?(k) }
-  hash.each do |k, v|
-    ENV[k] = hash[k]
-  end
-  yield
-ensure
-  hash.each do |k, v|
-    ENV.delete(k) unless old_vals.include?(k)
-    ENV[k] = old_vals[k]
-  end
-end
-
-def with_verbose(verbose)
-  orig_verbose = FastlaneCore::Globals.verbose?
-  FastlaneCore::Globals.verbose = verbose
-  yield if block_given?
-ensure
-  FastlaneCore::Globals.verbose = orig_verbose
 end
 
 def stub_commander_runner_args(args)

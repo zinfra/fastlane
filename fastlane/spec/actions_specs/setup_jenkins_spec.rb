@@ -30,6 +30,9 @@ describe Fastlane do
         expect(ENV["SCAN_OUTPUT_DIRECTORY"]).to be_nil
         expect(ENV["SCAN_RESULT_BUNDLE"]).to be_nil
         expect(ENV["XCODE_DERIVED_DATA_PATH"]).to be_nil
+        expect(ENV["MATCH_KEYCHAIN_NAME"]).to be_nil
+        expect(ENV["MATCH_KEYCHAIN_PASSWORD"]).to be_nil
+        expect(ENV["MATCH_READONLY"]).to be_nil
       end
 
       it "works when forced" do
@@ -104,6 +107,46 @@ describe Fastlane do
               unlock_keychain: false
             )
           end").runner.execute(:test)
+
+          expect(ENV["MATCH_KEYCHAIN_NAME"]).to be_nil
+          expect(ENV["MATCH_KEYCHAIN_PASSWORD"]).to be_nil
+          expect(ENV["MATCH_READONLY"]).to be_nil
+        end
+
+        it "unlock keychain" do
+          allow(Fastlane::Actions::UnlockKeychainAction).to receive(:run).and_return(nil)
+
+          keychain_path = Tempfile.new("foo").path
+          ENV["KEYCHAIN_PATH"] = keychain_path
+
+          expect(UI).to receive(:message).with("Unlocking keychain: \"#{keychain_path}\".")
+          expect(UI).to receive(:message).with(/Set output directory path to:/)
+          expect(UI).to receive(:message).with(/Set derived data path to:/)
+          expect(UI).to receive(:message).with("Set result bundle.")
+
+          Fastlane::FastFile.new.parse("lane :test do
+            setup_jenkins(
+              keychain_password: 'password'
+            )
+          end").runner.execute(:test)
+
+          expect(ENV["MATCH_KEYCHAIN_NAME"]).to eq(keychain_path)
+          expect(ENV["MATCH_KEYCHAIN_PASSWORD"]).to eq("password")
+          expect(ENV["MATCH_READONLY"]).to eq("true")
+        end
+
+        it "does not setup match if previously set" do
+          ENV["MATCH_KEYCHAIN_NAME"] = keychain_name = "keychain_name"
+          ENV["MATCH_KEYCHAIN_PASSWORD"] = keychain_password = "keychain_password"
+          ENV["MATCH_READONLY"] = "false"
+
+          Fastlane::FastFile.new.parse("lane :test do
+            setup_jenkins
+          end").runner.execute(:test)
+
+          expect(ENV["MATCH_KEYCHAIN_NAME"]).to eq(keychain_name)
+          expect(ENV["MATCH_KEYCHAIN_PASSWORD"]).to eq(keychain_password)
+          expect(ENV["MATCH_READONLY"]).to eq("false")
         end
 
         it "set code signing identity" do
@@ -129,31 +172,35 @@ describe Fastlane do
         end
 
         it "set output directory" do
+          tmp_path = Dir.mktmpdir
+          directory = "#{tmp_path}/output/directory"
           Fastlane::FastFile.new.parse("lane :test do
             setup_jenkins(
-              output_directory: '/tmp/output/directory'
+              output_directory: '#{directory}'
             )
           end").runner.execute(:test)
 
-          expect(ENV["BACKUP_XCARCHIVE_DESTINATION"]).to eq("/tmp/output/directory")
-          expect(ENV["GYM_BUILD_PATH"]).to eq("/tmp/output/directory")
-          expect(ENV["GYM_OUTPUT_DIRECTORY"]).to eq("/tmp/output/directory")
-          expect(ENV["SCAN_OUTPUT_DIRECTORY"]).to eq("/tmp/output/directory")
+          expect(ENV["BACKUP_XCARCHIVE_DESTINATION"]).to eq(directory)
+          expect(ENV["GYM_BUILD_PATH"]).to eq(directory)
+          expect(ENV["GYM_OUTPUT_DIRECTORY"]).to eq(directory)
+          expect(ENV["SCAN_OUTPUT_DIRECTORY"]).to eq(directory)
         end
 
         it "set derived data" do
+          tmp_path = Dir.mktmpdir
+          directory = "#{tmp_path}/derived_data"
           Fastlane::FastFile.new.parse("lane :test do
             setup_jenkins(
-              derived_data_path: '/tmp/derived_data'
+              derived_data_path: '#{directory}'
             )
           end").runner.execute(:test)
 
-          expect(ENV["DERIVED_DATA_PATH"]).to eq("/tmp/derived_data")
-          expect(ENV["FL_CARTHAGE_DERIVED_DATA"]).to eq("/tmp/derived_data")
-          expect(ENV["FL_SLATHER_BUILD_DIRECTORY"]).to eq("/tmp/derived_data")
-          expect(ENV["GYM_DERIVED_DATA_PATH"]).to eq("/tmp/derived_data")
-          expect(ENV["SCAN_DERIVED_DATA_PATH"]).to eq("/tmp/derived_data")
-          expect(ENV["XCODE_DERIVED_DATA_PATH"]).to eq("/tmp/derived_data")
+          expect(ENV["DERIVED_DATA_PATH"]).to eq(directory)
+          expect(ENV["FL_CARTHAGE_DERIVED_DATA"]).to eq(directory)
+          expect(ENV["FL_SLATHER_BUILD_DIRECTORY"]).to eq(directory)
+          expect(ENV["GYM_DERIVED_DATA_PATH"]).to eq(directory)
+          expect(ENV["SCAN_DERIVED_DATA_PATH"]).to eq(directory)
+          expect(ENV["XCODE_DERIVED_DATA_PATH"]).to eq(directory)
         end
 
         it "disable result bundle path" do

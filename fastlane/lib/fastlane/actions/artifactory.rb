@@ -11,7 +11,7 @@ module Fastlane
 
         require 'artifactory'
         file_path = File.absolute_path(params[:file])
-        if File.exist? file_path
+        if File.exist?(file_path)
           client = connect_to_artifactory(params)
           artifact = Artifactory::Resource::Artifact.new
           artifact.client = client
@@ -37,9 +37,9 @@ module Fastlane
       end
 
       def self.connect_to_artifactory(params)
-        config_keys = [:endpoint, :username, :password, :ssl_pem_file, :ssl_verify, :proxy_username, :proxy_password, :proxy_address, :proxy_port]
+        config_keys = [:endpoint, :username, :password, :ssl_pem_file, :ssl_verify, :proxy_username, :proxy_password, :proxy_address, :proxy_port, :read_timeout]
         config = params.values.select do |key|
-          config_keys.include? key
+          config_keys.include?(key)
         end
         Artifactory::Client.new(config)
       end
@@ -121,6 +121,7 @@ module Fastlane
           FastlaneCore::ConfigItem.new(key: :ssl_verify,
                                        env_name: "FL_ARTIFACTORY_SSL_VERIFY",
                                        description: "Verify SSL",
+                                       is_string: false,
                                        default_value: true,
                                        optional: true),
           FastlaneCore::ConfigItem.new(key: :proxy_username,
@@ -142,6 +143,11 @@ module Fastlane
           FastlaneCore::ConfigItem.new(key: :proxy_port,
                                        env_name: "FL_ARTIFACTORY_PROXY_PORT",
                                        description: "Proxy port",
+                                       default_value: nil,
+                                       optional: true),
+          FastlaneCore::ConfigItem.new(key: :read_timeout,
+                                       env_name: "FL_ARTIFACTORY_READ_TIMEOUT",
+                                       description: "Read timeout",
                                        default_value: nil,
                                        optional: true)
         ]

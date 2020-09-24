@@ -1,3 +1,5 @@
+require_relative 'portal_base'
+
 module Spaceship
   module Portal
     # Represents an Website Push ID from the Developer Portal
@@ -39,6 +41,8 @@ module Spaceship
         'identifier' => :bundle_id,
         'status' => :status
       )
+
+      alias app_id website_id # must be after attr_mapping
 
       class << self
         # @param mac [Bool] Fetches Mac website push if true

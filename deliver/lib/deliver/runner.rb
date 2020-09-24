@@ -1,4 +1,16 @@
-require 'precheck'
+require 'precheck/options'
+require 'precheck/runner'
+require 'fastlane_core/configuration/configuration'
+require 'fastlane_core/ipa_upload_package_builder'
+require 'fastlane_core/pkg_upload_package_builder'
+require 'fastlane_core/itunes_transporter'
+require 'spaceship'
+require_relative 'html_generator'
+require_relative 'submit_for_review'
+require_relative 'upload_price_tier'
+require_relative 'upload_metadata'
+require_relative 'upload_screenshots'
+require_relative 'detect_values'
 
 module Deliver
   class Runner
@@ -14,14 +26,31 @@ module Deliver
     end
 
     def login
-      UI.message("Login to iTunes Connect (#{options[:username]})")
-      Spaceship::Tunes.login(options[:username])
-      Spaceship::Tunes.select_team
-      UI.message("Login successful")
+      if api_token
+        UI.message("Creating authorization token for App Store Connect API")
+        Spaceship::ConnectAPI.token = api_token
+      else
+        # Team selection passed though FASTLANE_TEAM_ID and FASTLANE_TEAM_NAME environment variables
+        # Prompts select team if multiple teams and none specified
+        UI.message("Login to App Store Connect (#{options[:username]})")
+        Spaceship::ConnectAPI.login(options[:username], nil, use_portal: false, use_tunes: true)
+        UI.message("Login successful")
+      end
+    end
+
+    def api_token
+      @api_token ||= Spaceship::ConnectAPI::Token.create(options[:api_key]) if options[:api_key]
+      @api_token ||= Spaceship::ConnectAPI::Token.from_json_file(options[:api_key_path]) if options[:api_key_path]
+      return @api_token
     end
 
     def run
       verify_version if options[:app_version].to_s.length > 0 && !options[:skip_app_version_update]
+
+      # Rejecting before upload meta
+      # Screenshots can not be update/deleted if in waiting for review
+      reject_version_if_possible if options[:reject_if_possible]
+
       upload_metadata
 
       has_binary = (options[:ipa] || options[:pkg])
@@ -29,10 +58,9 @@ module Deliver
         upload_binary
       end
 
-      UI.success("Finished the upload to iTunes Connect") unless options[:skip_binary_upload]
+      UI.success("Finished the upload to App Store Connect") unless options[:skip_binary_upload]
 
       precheck_success = precheck_app
-
       submit_for_review if options[:submit_for_review] && precheck_success
     end
 
@@ -49,9 +77,21 @@ module Deliver
 
       precheck_options = {
         default_rule_level: options[:precheck_default_rule_level],
-        app_identifier: options[:app_identifier],
-        username: options[:username]
+        include_in_app_purchases: options[:precheck_include_in_app_purchases],
+        app_identifier: options[:app_identifier]
       }
+
+      if options[:api_key] || options[:api_key_path]
+        if options[:precheck_include_in_app_purchases]
+          UI.user_error!("Precheck cannot check In-app purchases with the App Store Connect API Key (yet). Exclude In-app purchases from precheck or use Apple ID login")
+        end
+
+        precheck_options[:api_key] = options[:api_key]
+        precheck_options[:api_key_path] = options[:api_key_path]
+      else
+        precheck_options[:username] = options[:username]
+        precheck_options[:platform] = options[:platform]
+      end
 
       precheck_config = FastlaneCore::Configuration.create(Precheck::Options.available_options, precheck_options)
       Precheck.config = precheck_config
@@ -63,30 +103,30 @@ module Deliver
         UI.error("fastlane precheck just tried to inspect your app's metadata for App Store guideline violations and ran into a problem. We're not sure what the problem was, but precheck failed to finished. You can run it in verbose mode if you want to see the whole error. We'll have a fix out soon 🚀")
         UI.verbose(ex.inspect)
         UI.verbose(ex.backtrace.join("\n"))
-
-        # always report this back, since this is a new tool, we don't want to crash, but we still want to see this
-        FastlaneCore::CrashReporter.report_crash(exception: ex)
       end
 
       return precheck_success
     end
 
-    # Make sure the version on iTunes Connect matches the one in the ipa
+    # Make sure the version on App Store Connect matches the one in the ipa
     # If not, the new version will automatically be created
     def verify_version
       app_version = options[:app_version]
-      UI.message("Making sure the latest version on iTunes Connect matches '#{app_version}' from the ipa file...")
+      UI.message("Making sure the latest version on App Store Connect matches '#{app_version}'...")
 
-      changed = options[:app].ensure_version!(app_version, platform: options[:platform])
+      app = options[:app]
+
+      platform = Spaceship::ConnectAPI::Platform.map(options[:platform])
+      changed = app.ensure_version!(app_version, platform: platform)
 
       if changed
         UI.success("Successfully set the version to '#{app_version}'")
       else
-        UI.success("'#{app_version}' is the latest version on iTunes Connect")
+        UI.success("'#{app_version}' is the latest version on App Store Connect")
       end
     end
 
-    # Upload all metadata, screenshots, pricing information, etc. to iTunes Connect
+    # Upload all metadata, screenshots, pricing information, etc. to App Store Connect
     def upload_metadata
       upload_metadata = UploadMetadata.new
       upload_screenshots = UploadScreenshots.new
@@ -98,9 +138,6 @@ module Deliver
       # Assign "default" values to all languages
       upload_metadata.assign_defaults(options)
 
-      # Handle app icon / watch icon
-      prepare_app_icons(options)
-
       # Validate
       validate_html(screenshots)
 
@@ -108,45 +145,49 @@ module Deliver
       upload_metadata.upload(options)
       upload_screenshots.upload(options, screenshots)
       UploadPriceTier.new.upload(options)
-      UploadAssets.new.upload(options) # e.g. app icon
     end
 
-    # If options[:app_icon]/options[:apple_watch_app_icon]
-    # is supplied value/path will be used.
-    # If it is unset files (app_icon/watch_icon) exists in
-    # the fastlane/metadata/ folder, those will be used
-    def prepare_app_icons(options = {})
-      return unless options[:metadata_path]
-
-      default_app_icon_path = Dir[File.join(options[:metadata_path], "app_icon.{png,jpg}")].first
-      options[:app_icon] ||= default_app_icon_path if default_app_icon_path && File.exist?(default_app_icon_path)
-
-      default_watch_icon_path = Dir[File.join(options[:metadata_path], "watch_icon.{png,jpg}")].first
-      options[:apple_watch_app_icon] ||= default_watch_icon_path if default_watch_icon_path && File.exist?(default_watch_icon_path)
-    end
-
-    # Upload the binary to iTunes Connect
+    # Upload the binary to App Store Connect
     def upload_binary
-      UI.message("Uploading binary to iTunes Connect")
-      if options[:ipa]
+      UI.message("Uploading binary to App Store Connect")
+
+      upload_ipa = options[:ipa]
+      upload_pkg = options[:pkg]
+
+      # 2020-01-27
+      # Only verify platform if if both ipa and pkg exists (for backwards support)
+      if upload_ipa && upload_pkg
+        upload_ipa = ["ios", "appletvos"].include?(options[:platform])
+        upload_pkg = options[:platform] == "osx"
+      end
+
+      if upload_ipa
         package_path = FastlaneCore::IpaUploadPackageBuilder.new.generate(
-          app_id: options[:app].apple_id,
+          app_id: options[:app].id,
           ipa_path: options[:ipa],
           package_path: "/tmp",
           platform: options[:platform]
         )
-      elsif options[:pkg]
+      elsif upload_pkg
         package_path = FastlaneCore::PkgUploadPackageBuilder.new.generate(
-          app_id: options[:app].apple_id,
+          app_id: options[:app].id,
           pkg_path: options[:pkg],
           package_path: "/tmp",
           platform: options[:platform]
         )
       end
 
-      transporter = FastlaneCore::ItunesTransporter.new(options[:username], nil, false, options[:itc_provider])
-      result = transporter.upload(options[:app].apple_id, package_path)
-      UI.user_error!("Could not upload binary to iTunes Connect. Check out the error above", show_github_issues: true) unless result
+      transporter = transporter_for_selected_team
+      result = transporter.upload(options[:app].id, package_path)
+      UI.user_error!("Could not upload binary to App Store Connect. Check out the error above", show_github_issues: true) unless result
+    end
+
+    def reject_version_if_possible
+      app = options[:app]
+      platform = Spaceship::ConnectAPI::Platform.map(options[:platform])
+      if app.reject_version_if_possible!(platform: platform)
+        UI.success("Successfully rejected previous version!")
+      end
     end
 
     def submit_for_review
@@ -154,6 +195,34 @@ module Deliver
     end
 
     private
+
+    # If App Store Connect API token, use token.
+    # If itc_provider was explicitly specified, use it.
+    # If there are multiple teams, infer the provider from the selected team name.
+    # If there are fewer than two teams, don't infer the provider.
+    def transporter_for_selected_team
+      # Use JWT auth
+      unless api_token.nil?
+        api_token.refresh! if api_token.expired?
+        return FastlaneCore::ItunesTransporter.new(nil, nil, false, nil, api_token.text)
+      end
+
+      tunes_client = Spaceship::ConnectAPI.client.tunes_client
+
+      generic_transporter = FastlaneCore::ItunesTransporter.new(options[:username], nil, false, options[:itc_provider])
+      return generic_transporter unless options[:itc_provider].nil? && tunes_client.teams.count > 1
+
+      begin
+        team = tunes_client.teams.find { |t| t['contentProvider']['contentProviderId'].to_s == tunes_client.team_id }
+        name = team['contentProvider']['name']
+        provider_id = generic_transporter.provider_ids[name]
+        UI.verbose("Inferred provider id #{provider_id} for team #{name}.")
+        return FastlaneCore::ItunesTransporter.new(options[:username], nil, false, provider_id)
+      rescue => ex
+        UI.verbose("Couldn't infer a provider short name for team with id #{tunes_client.team_id} automatically: #{ex}. Proceeding without provider short name.")
+        return generic_transporter
+      end
+    end
 
     def validate_html(screenshots)
       return if options[:force]

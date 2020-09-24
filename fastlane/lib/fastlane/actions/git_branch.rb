@@ -1,7 +1,10 @@
 module Fastlane
   module Actions
     module SharedValues
-      GIT_BRANCH_ENV_VARS = %w(GIT_BRANCH BRANCH_NAME TRAVIS_BRANCH BITRISE_GIT_BRANCH CI_BUILD_REF_NAME CI_COMMIT_REF_NAME).freeze
+      GIT_BRANCH_ENV_VARS = %w(GIT_BRANCH BRANCH_NAME TRAVIS_BRANCH BITRISE_GIT_BRANCH CI_BUILD_REF_NAME CI_COMMIT_REF_NAME WERCKER_GIT_BRANCH BUILDKITE_BRANCH APPCENTER_BRANCH CIRCLE_BRANCH).reject do |branch|
+        # Removing because tests break on CircleCI
+        Helper.test? && branch == "CIRCLE_BRANCH"
+      end.freeze
     end
 
     class GitBranchAction < Action
@@ -27,7 +30,9 @@ module Fastlane
       end
 
       def self.output
-        []
+        [
+          ['GIT_BRANCH_ENV_VARS', 'The git branch environment variables']
+        ]
       end
 
       def self.authors
@@ -42,6 +47,10 @@ module Fastlane
         [
           'git_branch'
         ]
+      end
+
+      def self.return_type
+        :string
       end
 
       def self.category

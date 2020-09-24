@@ -21,6 +21,10 @@ module Fastlane
           File.delete(file)
         end
 
+        Actions.lane_context[Actions::SharedValues::SIGH_PROFILE_PATHS] = nil
+        Actions.lane_context[Actions::SharedValues::DSYM_PATHS] = nil
+        Actions.lane_context[Actions::SharedValues::DSYM_LATEST_UPLOADED_DATE] = nil
+
         UI.success('Cleaned up build artifacts 🐙')
       end
 
@@ -51,7 +55,7 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include? platform
+        [:ios, :mac].include?(platform)
       end
 
       def self.example_code

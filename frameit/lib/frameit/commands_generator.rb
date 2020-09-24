@@ -1,5 +1,13 @@
 require 'commander'
 require 'fastlane/version'
+require 'fastlane_core/globals'
+require 'fastlane_core/configuration/configuration'
+
+require_relative 'device_types'
+require_relative 'runner'
+require_relative 'options'
+require_relative 'dependency_checker'
+require_relative 'device'
 
 HighLine.track_eof = false
 
@@ -18,12 +26,13 @@ module Frameit
       program :description, 'Quickly put your screenshots into the right device frames'
       program :help, 'Author', 'Felix Krause <frameit@krausefx.com>'
       program :help, 'Website', 'https://fastlane.tools'
-      program :help, 'GitHub', 'https://github.com/fastlane/fastlane/tree/master/frameit#readme'
+      program :help, 'Documentation', 'https://docs.fastlane.tools/actions/frameit/'
       program :help_formatter, :compact
 
       global_option('--verbose') { FastlaneCore::Globals.verbose = true }
+      global_option('--env STRING[,STRING2]', String, 'Add environment(s) to use with `dotenv`')
 
-      default_command :run
+      default_command(:run)
 
       command :run do |c|
         c.syntax = 'fastlane frameit black'
@@ -73,6 +82,30 @@ module Frameit
         end
       end
 
+      command :android do |c|
+        c.syntax = 'fastlane frameit android'
+        c.description = "Adds Android frames around all screenshots"
+
+        FastlaneCore::CommanderGenerator.new.generate(Frameit::Options.available_options, command: c)
+
+        c.action do |args, options|
+          load_config(options)
+          Frameit::Runner.new.run('.', nil, Platform::ANDROID)
+        end
+      end
+
+      command :ios do |c|
+        c.syntax = 'fastlane frameit ios'
+        c.description = "Adds iOS frames around all screenshots"
+
+        FastlaneCore::CommanderGenerator.new.generate(Frameit::Options.available_options, command: c)
+
+        c.action do |args, options|
+          load_config(options)
+          Frameit::Runner.new.run('.', nil, Platform::IOS)
+        end
+      end
+
       command :setup do |c|
         c.syntax = 'fastlane frameit setup'
         c.description = "Downloads and sets up the latest device frames"
@@ -91,7 +124,7 @@ module Frameit
         end
       end
 
-      alias_command :white, :silver
+      alias_command(:white, :silver)
 
       run!
     end

@@ -1,6 +1,10 @@
 require 'plist'
 
 require_relative 'client_stubbing'
+require_relative 'connect_api/provisioning/provisioning_stubbing'
+require_relative 'connect_api/testflight/testflight_stubbing'
+require_relative 'connect_api/tunes/tunes_stubbing'
+require_relative 'connect_api/users/users_stubbing'
 require_relative 'portal/portal_stubbing'
 require_relative 'tunes/tunes_stubbing'
 require_relative 'du/du_stubbing'
@@ -13,7 +17,7 @@ set_auth_vars = [
 ].select { |var| ENV.key?(var) }
 
 if set_auth_vars.any?
-  abort "[!] Please `unset` the following ENV vars which interfere with spaceship testing: #{set_auth_vars.join(', ')}".red
+  abort("[!] Please `unset` the following ENV vars which interfere with spaceship testing: #{set_auth_vars.join(', ')}".red)
 end
 
 @cache_paths = [
@@ -21,11 +25,11 @@ end
 ]
 
 def try_delete(path)
-  FileUtils.rm_f(path) if File.exist? path
+  FileUtils.rm_f(path) if File.exist?(path)
 end
 
 def before_each_spaceship
-  @cache_paths.each { |path| try_delete path }
+  @cache_paths.each { |path| try_delete(path) }
   ENV["DELIVER_USER"] = "spaceship@krausefx.com"
   ENV["DELIVER_PASSWORD"] = "so_secret"
   ENV['SPACESHIP_AVOID_XCODE_API'] = 'true'
@@ -55,18 +59,44 @@ def before_each_spaceship
   TunesStubbing.itc_stub_sandbox_testers
   TunesStubbing.itc_stub_create_sandbox_tester
   TunesStubbing.itc_stub_delete_sandbox_tester
-  TunesStubbing.itc_stub_candiate_builds
+  TunesStubbing.itc_stub_candidate_builds
   TunesStubbing.itc_stub_pricing_tiers
   TunesStubbing.itc_stub_release_to_store
+  TunesStubbing.itc_stub_release_to_all_users
   TunesStubbing.itc_stub_promocodes
   TunesStubbing.itc_stub_generate_promocodes
   TunesStubbing.itc_stub_promocodes_history
   TunesStubbing.itc_stub_supported_countries
-  TunesStubbing.itc_stub_iap
+
+  ConnectAPIStubbing::Provisioning.stub_bundle_ids
+  ConnectAPIStubbing::Provisioning.stub_bundle_id
+  ConnectAPIStubbing::Provisioning.stub_certificates
+  ConnectAPIStubbing::Provisioning.stub_devices
+  ConnectAPIStubbing::Provisioning.stub_profiles
+
+  ConnectAPIStubbing::TestFlight.stub_apps
+  ConnectAPIStubbing::TestFlight.stub_beta_app_localizations
+  ConnectAPIStubbing::TestFlight.stub_beta_app_review_details
+  ConnectAPIStubbing::TestFlight.stub_beta_app_review_submissions
+  ConnectAPIStubbing::TestFlight.stub_beta_build_localizations
+  ConnectAPIStubbing::TestFlight.stub_beta_build_metrics
+  ConnectAPIStubbing::TestFlight.stub_beta_feedbacks
+  ConnectAPIStubbing::TestFlight.stub_beta_feedbacks_delete
+  ConnectAPIStubbing::TestFlight.stub_beta_groups
+  ConnectAPIStubbing::TestFlight.stub_beta_testers
+  ConnectAPIStubbing::TestFlight.stub_beta_tester_metrics
+  ConnectAPIStubbing::TestFlight.stub_build_beta_details
+  ConnectAPIStubbing::TestFlight.stub_build_deliveries
+  ConnectAPIStubbing::TestFlight.stub_builds
+  ConnectAPIStubbing::TestFlight.stub_pre_release_versions
+
+  ConnectAPIStubbing::Tunes.stub_app_store_version_release_request
+
+  ConnectAPIStubbing::Users.stub_users
 end
 
 def after_each_spaceship
-  @cache_paths.each { |path| try_delete path }
+  @cache_paths.each { |path| try_delete(path) }
 end
 
 RSpec.configure do |config|

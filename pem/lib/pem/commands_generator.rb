@@ -1,5 +1,9 @@
 require 'commander'
+
 require 'fastlane/version'
+require 'fastlane_core/configuration/configuration'
+require_relative 'options'
+require_relative 'manager'
 
 HighLine.track_eof = false
 
@@ -17,10 +21,11 @@ module PEM
       program :description, 'CLI for \'PEM\' - Automatically generate and renew your push notification profiles'
       program :help, 'Author', 'Felix Krause <pem@krausefx.com>'
       program :help, 'Website', 'https://fastlane.tools'
-      program :help, 'GitHub', 'https://github.com/fastlane/fastlane/tree/master/pem#readme'
+      program :help, 'Documentation', 'https://docs.fastlane.tools/actions/pem/'
       program :help_formatter, :compact
 
       global_option('--verbose') { FastlaneCore::Globals.verbose = true }
+      global_option('--env STRING[,STRING2]', String, 'Add environment(s) to use with `dotenv`')
 
       command :renew do |c|
         c.syntax = 'fastlane pem renew'
@@ -34,7 +39,7 @@ module PEM
         end
       end
 
-      default_command :renew
+      default_command(:renew)
 
       run!
     end

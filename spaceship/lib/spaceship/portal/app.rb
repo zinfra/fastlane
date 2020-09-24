@@ -1,3 +1,7 @@
+require_relative 'portal_base'
+require_relative 'app_group'
+require_relative 'cloud_container'
+
 module Spaceship
   module Portal
     # Represents an App ID from the Developer Portal
@@ -54,6 +58,9 @@ module Spaceship
       # @return (Array of Spaceship::Portal::AppGroup) Associated groups
       attr_accessor :associated_groups
 
+      # @return (Array of Spaceship::Portal::CloudContainer) Associated cloud containers
+      attr_accessor :associated_cloud_containers
+
       attr_mapping(
         'appIdId' => :app_id,
         'name' => :name,
@@ -67,7 +74,8 @@ module Spaceship
         'isProdPushEnabled' => :prod_push_enabled,
         'associatedApplicationGroupsCount' => :app_groups_count,
         'associatedCloudContainersCount' => :cloud_containers_count,
-        'associatedIdentifiersCount' => :identifiers_count
+        'associatedIdentifiersCount' => :identifiers_count,
+        'associatedCloudContainers' => :associated_cloud_containers
       )
 
       class << self
@@ -100,17 +108,34 @@ module Spaceship
         # @return (App) The app you're looking for. This is nil if the app can't be found.
         def find(bundle_id, mac: false)
           raise "`bundle_id` parameter must not be nil" if bundle_id.nil?
-          all(mac: mac).find do |app|
-            return app if app.bundle_id.casecmp(bundle_id) == 0
+          found_app = all(mac: mac).find do |app|
+            app if app.bundle_id.casecmp(bundle_id) == 0
           end
+
+          # Find catalyst enabled mac apps (look for mac first and then iOS)
+          if !found_app && mac
+            found_app = all(mac: false).find do |app|
+              app if app.bundle_id.casecmp(bundle_id) == 0
+            end
+          end
+
+          found_app
         end
       end
 
       def associated_groups
-        return unless raw_data.key?('associatedApplicationGroups')
+        return unless raw_data['associatedApplicationGroups']
 
         @associated_groups ||= raw_data['associatedApplicationGroups'].map do |info|
           Spaceship::Portal::AppGroup.new(info)
+        end
+      end
+
+      def associated_cloud_containers
+        return unless raw_data['associatedCloudContainers']
+
+        @associated_cloud_containers ||= raw_data['associatedCloudContainers'].map do |info|
+          Spaceship::Portal::CloudContainer.new(info)
         end
       end
 
@@ -141,6 +166,14 @@ module Spaceship
       def associate_groups(groups)
         raise "`associate_groups` not available for Mac apps" if mac?
         app = client.associate_groups_with_app(self, groups)
+        self.class.factory(app)
+      end
+
+      # Associate specific iCloud Containers with this app
+      # @return (App) The updated detailed app. This is nil if the app couldn't be found.
+      def associate_cloud_containers(containers)
+        raise "`associate_cloud_containers` not available for Mac apps" if mac?
+        app = client.associate_cloud_containers_with_app(self, containers)
         self.class.factory(app)
       end
 

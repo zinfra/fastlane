@@ -8,9 +8,9 @@ module Fastlane
         cmd << ['bundle exec'] if params[:use_bundle_exec] && shell_out_should_use_bundle_exec?
         cmd << ['pod keys set']
 
-        cmd << ["\"#{params[:key].shellescape}\""]
-        cmd << ["\"#{params[:value].shellescape}\""]
-        cmd << ["\"#{params[:project].shellescape}\""] if params[:project]
+        cmd << ["\"#{params[:key]}\""]
+        cmd << ["\"#{params[:value]}\""]
+        cmd << ["\"#{params[:project]}\""] if params[:project]
 
         Actions.sh(cmd.join(' '))
       end
@@ -57,7 +57,7 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include? platform
+        [:ios, :mac].include?(platform)
       end
 
       def self.example_code

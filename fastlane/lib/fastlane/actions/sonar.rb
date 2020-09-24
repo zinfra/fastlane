@@ -16,9 +16,17 @@ module Fastlane
         sonar_scanner_args << "-Dsonar.projectName=\"#{params[:project_name]}\"" if params[:project_name]
         sonar_scanner_args << "-Dsonar.projectVersion=\"#{params[:project_version]}\"" if params[:project_version]
         sonar_scanner_args << "-Dsonar.sources=\"#{params[:sources_path]}\"" if params[:sources_path]
+        sonar_scanner_args << "-Dsonar.exclusions=\"#{params[:exclusions]}\"" if params[:exclusions]
         sonar_scanner_args << "-Dsonar.language=\"#{params[:project_language]}\"" if params[:project_language]
         sonar_scanner_args << "-Dsonar.sourceEncoding=\"#{params[:source_encoding]}\"" if params[:source_encoding]
         sonar_scanner_args << "-Dsonar.login=\"#{params[:sonar_login]}\"" if params[:sonar_login]
+        sonar_scanner_args << "-Dsonar.host.url=\"#{params[:sonar_url]}\"" if params[:sonar_url]
+        sonar_scanner_args << "-Dsonar.organization=\"#{params[:sonar_organization]}\"" if params[:sonar_organization]
+        sonar_scanner_args << "-Dsonar.branch.name=\"#{params[:branch_name]}\"" if params[:branch_name]
+        sonar_scanner_args << "-Dsonar.pullrequest.branch=\"#{params[:pull_request_branch]}\"" if params[:pull_request_branch]
+        sonar_scanner_args << "-Dsonar.pullrequest.base=\"#{params[:pull_request_base]}\"" if params[:pull_request_base]
+        sonar_scanner_args << "-Dsonar.pullrequest.key=\"#{params[:pull_request_key]}\"" if params[:pull_request_key]
+
         sonar_scanner_args << params[:sonar_runner_args] if params[:sonar_runner_args]
 
         command = [
@@ -44,8 +52,8 @@ module Fastlane
 
       def self.details
         [
-          "See http://docs.sonarqube.org/display/SCAN/Analyzing+with+SonarQube+Scanner for details.",
-          "It can process unit test results if formatted as junit report as shown in [xctest](#xctest) action. It can also integrate coverage reports in Cobertura format, which can be transformed into by [slather](#slather) action."
+          "See [http://docs.sonarqube.org/display/SCAN/Analyzing+with+SonarQube+Scanner](http://docs.sonarqube.org/display/SCAN/Analyzing+with+SonarQube+Scanner) for details.",
+          "It can process unit test results if formatted as junit report as shown in [xctest](https://docs.fastlane.tools/actions/xctest/) action. It can also integrate coverage reports in Cobertura format, which can be transformed into by the [slather](https://docs.fastlane.tools/actions/slather/) action."
         ].join("\n")
       end
 
@@ -56,7 +64,7 @@ module Fastlane
                                         description: "The path to your sonar project configuration file; defaults to `sonar-project.properties`", # default is enforced by sonar-scanner binary
                                         optional: true,
                                         verify_block: proc do |value|
-                                          UI.user_error!("Couldn't find file at path '#{value}'") unless value.nil? or File.exist?(value)
+                                          UI.user_error!("Couldn't find file at path '#{value}'") unless value.nil? || File.exist?(value)
                                         end),
           FastlaneCore::ConfigItem.new(key: :project_key,
                                        env_name: "FL_SONAR_RUNNER_PROJECT_KEY",
@@ -73,6 +81,10 @@ module Fastlane
           FastlaneCore::ConfigItem.new(key: :sources_path,
                                        env_name: "FL_SONAR_RUNNER_SOURCES_PATH",
                                        description: "Comma-separated paths to directories containing source files. Must either be specified here or inside the sonar project configuration file",
+                                       optional: true),
+          FastlaneCore::ConfigItem.new(key: :exclusions,
+                                       env_name: "FL_SONAR_RUNNER_EXCLUSIONS",
+                                       description: "Comma-separated paths to directories to be excluded from the analysis",
                                        optional: true),
           FastlaneCore::ConfigItem.new(key: :project_language,
                                        env_name: "FL_SONAR_RUNNER_PROJECT_LANGUAGE",
@@ -91,7 +103,37 @@ module Fastlane
                                        description: "Pass the Sonar Login token (e.g: xxxxxxprivate_token_XXXXbXX7e)",
                                        optional: true,
                                        is_string: true,
-                                       sensitive: true)
+                                       sensitive: true),
+          FastlaneCore::ConfigItem.new(key: :sonar_url,
+                                       env_name: "FL_SONAR_URL",
+                                       description: "Pass the url of the Sonar server",
+                                       optional: true,
+                                       is_string: true),
+          FastlaneCore::ConfigItem.new(key: :sonar_organization,
+                                       env_name: "FL_SONAR_ORGANIZATION",
+                                       description: "Key of the organization on SonarCloud",
+                                       optional: true,
+                                       is_string: true),
+          FastlaneCore::ConfigItem.new(key: :branch_name,
+                                       env_name: "FL_SONAR_RUNNER_BRANCH_NAME",
+                                       description: "Pass the branch name which is getting scanned",
+                                       optional: true,
+                                       is_string: true),
+          FastlaneCore::ConfigItem.new(key: :pull_request_branch,
+                                       env_name: "FL_SONAR_RUNNER_PULL_REQUEST_BRANCH",
+                                       description: "The name of the branch that contains the changes to be merged",
+                                       optional: true,
+                                       is_string: true),
+          FastlaneCore::ConfigItem.new(key: :pull_request_base,
+                                       env_name: "FL_SONAR_RUNNER_PULL_REQUEST_BASE",
+                                       description: "The long-lived branch into which the PR will be merged",
+                                       optional: true,
+                                       is_string: true),
+          FastlaneCore::ConfigItem.new(key: :pull_request_key,
+                                       env_name: "FL_SONAR_RUNNER_PULL_REQUEST_KEY",
+                                       description: "Unique identifier of your PR. Must correspond to the key of the PR in GitHub or TFS",
+                                       optional: true,
+                                       is_string: true)
         ]
       end
 
@@ -114,6 +156,15 @@ module Fastlane
             project_version: "1.0",
             project_name: "iOS - AwesomeApp",
             sources_path: File.expand_path("../AwesomeApp")
+          )',
+          'sonar(
+            project_key: "name.gretzki.awesomeApp",
+            project_version: "1.0",
+            project_name: "iOS - AwesomeApp",
+            sources_path: File.expand_path("../AwesomeApp"),
+            sonar_organization: "myOrg",
+            sonar_login: "123456abcdef",
+            sonar_url: "https://sonarcloud.io"
           )'
         ]
       end

@@ -19,7 +19,7 @@ module Fastlane
     #
     class XcodeSelectAction < Action
       def self.run(params)
-        params = nil unless params.kind_of? Array
+        params = nil unless params.kind_of?(Array)
         xcode_path = (params || []).first
 
         # Verify that a param was passed in
@@ -38,7 +38,12 @@ module Fastlane
       end
 
       def self.details
-        "Select and build with the Xcode installed at the provided path. Use the `xcversion` action if you want to select an Xcode based on a version specifier or you don't have known, stable paths as may happen in a CI environment."
+        [
+          "Select and build with the Xcode installed at the provided path.",
+          "Use the `xcversion` action if you want to select an Xcode:",
+          "- Based on a version specifier or",
+          "- You don't have known, stable paths, as may happen in a CI environment."
+        ].join("\n")
       end
 
       def self.author
@@ -46,12 +51,12 @@ module Fastlane
       end
 
       def self.is_supported?(platform)
-        [:ios, :mac].include? platform
+        [:ios, :mac].include?(platform)
       end
 
       def self.example_code
         [
-          'xcode_select "/Applications/Xcode-8.3.2.app"'
+          'xcode_select("/Applications/Xcode-8.3.2.app")'
         ]
       end
 

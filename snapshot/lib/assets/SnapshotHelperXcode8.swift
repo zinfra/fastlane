@@ -3,7 +3,6 @@
 //  Example
 //
 //  Created by Felix Krause on 10/8/15.
-//  Copyright © 2015 Felix Krause. All rights reserved.
 //
 
 // -----------------------------------------------------
@@ -101,7 +100,7 @@ open class Snapshot: NSObject {
             waitForLoadingIndicatorToDisappear()
         }
 
-        print("snapshot: \(name)") // more information about this, check out https://github.com/fastlane/fastlane/tree/master/snapshot#how-does-it-work
+        print("snapshot: \(name)") // more information about this, check out https://docs.fastlane.tools/actions/snapshot/#how-does-it-work
 
         sleep(1) // Waiting for the animation to be finished (kind of)
 
@@ -137,7 +136,7 @@ open class Snapshot: NSObject {
                 return nil
             }
 
-            guard let usersDir =  FileManager.default.urls(for: .userDirectory, in: .localDomainMask).first else {
+            guard let usersDir = FileManager.default.urls(for: .userDirectory, in: .localDomainMask).first else {
                 print("Couldn't find Snapshot configuration files - can't detect `Users` dir")
                 return nil
             }
@@ -160,8 +159,8 @@ open class Snapshot: NSObject {
 
 extension XCUIElement {
     var isLoadingIndicator: Bool {
-        let whiteListedLoaders = ["GeofenceLocationTrackingOn", "StandardLocationTrackingOn"]
-        if whiteListedLoaders.contains(self.identifier) {
+        let allowListedLoaders = ["GeofenceLocationTrackingOn", "StandardLocationTrackingOn"]
+        if allowListedLoaders.contains(self.identifier) {
             return false
         }
         return self.frame.size == CGSize(width: 10, height: 20)
@@ -170,4 +169,4 @@ extension XCUIElement {
 
 // Please don't remove the lines below
 // They are used to detect outdated configuration files
-// SnapshotHelperXcode8Version [1.4]
+// SnapshotHelperXcode8Version [1.5]

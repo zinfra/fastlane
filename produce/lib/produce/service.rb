@@ -1,3 +1,6 @@
+require 'spaceship'
+require_relative 'module'
+
 module Produce
   class Service
     def self.enable(options, args)
@@ -33,14 +36,25 @@ module Produce
     end
 
     def valid_services_for(options)
-      allowed_keys = [:app_group, :apple_pay, :associated_domains, :data_protection, :game_center, :healthkit, :homekit,
-                      :wireless_conf, :icloud, :in_app_purchase, :inter_app_audio, :passbook, :push_notification, :sirikit, :vpn_conf]
-      options.__hash__.select { |key, value| allowed_keys.include? key }
+      allowed_keys = [:access_wifi, :app_group, :apple_pay, :associated_domains, :auto_fill_credential, :data_protection, :game_center, :healthkit, :homekit,
+                      :hotspot, :icloud, :in_app_purchase, :inter_app_audio, :multipath, :network_extension,
+                      :nfc_tag_reading, :personal_vpn, :passbook, :push_notification, :sirikit, :vpn_conf,
+                      :wallet, :wireless_conf]
+      options.__hash__.select { |key, value| allowed_keys.include?(key) }
     end
 
     # rubocop:disable Metrics/PerceivedComplexity
     def update(on, app, options)
       updated = valid_services_for(options).count
+
+      if options.access_wifi
+        UI.message("\tAccess WiFi")
+        if on
+          app.update_service(Spaceship.app_service.access_wifi.on)
+        else
+          app.update_service(Spaceship.app_service.access_wifi.off)
+        end
+      end
 
       if options.app_group
         UI.message("\tApp Groups")
@@ -69,6 +83,16 @@ module Produce
           app.update_service(Spaceship.app_service.associated_domains.on)
         else
           app.update_service(Spaceship.app_service.associated_domains.off)
+        end
+      end
+
+      if options.auto_fill_credential
+        UI.message("\tAutoFill Credential")
+
+        if on
+          app.update_service(Spaceship.app_service.auto_fill_credential.on)
+        else
+          app.update_service(Spaceship.app_service.auto_fill_credential.off)
         end
       end
 
@@ -121,6 +145,16 @@ module Produce
         end
       end
 
+      if options.wallet
+        UI.message("\tWallet")
+
+        if on
+          app.update_service(Spaceship.app_service.wallet.on)
+        else
+          app.update_service(Spaceship.app_service.wallet.off)
+        end
+      end
+
       if options.wireless_conf
         UI.message("\tWireless Accessory Configuration")
 
@@ -137,16 +171,16 @@ module Produce
         if on
           case options.icloud
           when "legacy"
-            app.update_service(Spaceship.app_service.icloud.on)
+            app.update_service(Spaceship.app_service.cloud.on)
             app.update_service(Spaceship.app_service.cloud_kit.xcode5_compatible)
           when "cloudkit"
-            app.update_service(Spaceship.app_service.icloud.on)
+            app.update_service(Spaceship.app_service.cloud.on)
             app.update_service(Spaceship.app_service.cloud_kit.cloud_kit)
           else
             UI.user_error!("Unknown service '#{options.icloud}'. Valid values: 'legacy', 'cloudkit'")
           end
         else
-          app.update_service(Spaceship.app_service.icloud.off)
+          app.update_service(Spaceship.app_service.cloud.off)
         end
       end
 
@@ -170,6 +204,17 @@ module Produce
         end
       end
 
+      if options.personal_vpn
+        UI.message("\tPersonal VPN")
+
+        if on
+          app.update_service(Spaceship.app_service.personal_vpn.on)
+        else
+          app.update_service(Spaceship.app_service.personal_vpn.off)
+        end
+      end
+
+      # deprecated
       if options.passbook
         UI.message("\tPassbook")
 
@@ -184,7 +229,13 @@ module Produce
         UI.message("\tPush Notifications")
 
         if on
-          app.update_service(Spaceship.app_service.push_notification.on)
+          # Don't enable push notifications if already enabled
+          # Enabling push notifications when already on revokes certs
+          # https://github.com/fastlane/fastlane/issues/15315
+          # https://github.com/fastlane/fastlane/issues/8883
+          unless app.details.enable_services.include?("push")
+            app.update_service(Spaceship.app_service.push_notification.on)
+          end
         else
           app.update_service(Spaceship.app_service.push_notification.off)
         end
@@ -200,6 +251,7 @@ module Produce
         end
       end
 
+      # deprecated
       if options.vpn_conf
         UI.message("\tVPN Configuration")
 
@@ -207,6 +259,46 @@ module Produce
           app.update_service(Spaceship.app_service.vpn_configuration.on)
         else
           app.update_service(Spaceship.app_service.vpn_configuration.off)
+        end
+      end
+
+      if options.network_extension
+        UI.message("\tNetwork Extension")
+
+        if on
+          app.update_service(Spaceship.app_service.network_extension.on)
+        else
+          app.update_service(Spaceship.app_service.network_extension.off)
+        end
+      end
+
+      if options.hotspot
+        UI.message("\tHotspot")
+
+        if on
+          app.update_service(Spaceship.app_service.hotspot.on)
+        else
+          app.update_service(Spaceship.app_service.hotspot.off)
+        end
+      end
+
+      if options.multipath
+        UI.message("\tMultipath")
+
+        if on
+          app.update_service(Spaceship.app_service.multipath.on)
+        else
+          app.update_service(Spaceship.app_service.multipath.off)
+        end
+      end
+
+      if options.nfc_tag_reading
+        UI.message("\tNFC Tag Reading")
+
+        if on
+          app.update_service(Spaceship.app_service.nfc_tag_reading.on)
+        else
+          app.update_service(Spaceship.app_service.nfc_tag_reading.off)
         end
       end
 
