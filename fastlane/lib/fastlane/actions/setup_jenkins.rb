@@ -14,13 +14,16 @@ module Fastlane
         "SCAN_DERIVED_DATA_PATH",
         "SCAN_OUTPUT_DIRECTORY",
         "SCAN_RESULT_BUNDLE",
-        "XCODE_DERIVED_DATA_PATH"
+        "XCODE_DERIVED_DATA_PATH",
+        "MATCH_KEYCHAIN_NAME",
+        "MATCH_KEYCHAIN_PASSWORD",
+        "MATCH_READONLY"
       ].freeze
 
       def self.run(params)
         # Stop if not executed by CI
-        if !Helper.is_ci? && !params[:force]
-          UI.important "Not executed by Continuous Integration system."
+        if !Helper.ci? && !params[:force]
+          UI.important("Not executed by Continuous Integration system.")
           return
         end
 
@@ -33,26 +36,29 @@ module Fastlane
         # Keychain
         if params[:unlock_keychain] && params[:keychain_path]
           keychain_path = params[:keychain_path]
-          UI.message "Unlocking keychain: \"#{keychain_path}\"."
+          UI.message("Unlocking keychain: \"#{keychain_path}\".")
           Actions::UnlockKeychainAction.run(
             path: keychain_path,
             password: params[:keychain_password],
             add_to_search_list: params[:add_keychain_to_search_list],
             set_default: params[:set_default_keychain]
           )
+          ENV['MATCH_KEYCHAIN_NAME'] ||= keychain_path
+          ENV['MATCH_KEYCHAIN_PASSWORD'] ||= params[:keychain_password]
+          ENV["MATCH_READONLY"] ||= true.to_s
         end
 
         # Code signing identity
         if params[:set_code_signing_identity] && params[:code_signing_identity]
           code_signing_identity = params[:code_signing_identity]
-          UI.message "Set code signing identity: \"#{code_signing_identity}\"."
+          UI.message("Set code signing identity: \"#{code_signing_identity}\".")
           ENV['GYM_CODE_SIGNING_IDENTITY'] = code_signing_identity
         end
 
         # Set output directory
         if params[:output_directory]
           output_directory_path = File.expand_path(params[:output_directory])
-          UI.message "Set output directory path to: \"#{output_directory_path}\"."
+          UI.message("Set output directory path to: \"#{output_directory_path}\".")
           ENV['GYM_BUILD_PATH'] = output_directory_path
           ENV['GYM_OUTPUT_DIRECTORY'] = output_directory_path
           ENV['SCAN_OUTPUT_DIRECTORY'] = output_directory_path
@@ -62,7 +68,7 @@ module Fastlane
         # Set derived data
         if params[:derived_data_path]
           derived_data_path = File.expand_path(params[:derived_data_path])
-          UI.message "Set derived data path to: \"#{derived_data_path}\"."
+          UI.message("Set derived data path to: \"#{derived_data_path}\".")
           ENV['DERIVED_DATA_PATH'] = derived_data_path # Used by clear_derived_data.
           ENV['XCODE_DERIVED_DATA_PATH'] = derived_data_path
           ENV['GYM_DERIVED_DATA_PATH'] = derived_data_path
@@ -73,7 +79,7 @@ module Fastlane
 
         # Set result bundle
         if params[:result_bundle]
-          UI.message "Set result bundle."
+          UI.message("Set result bundle.")
           ENV['GYM_RESULT_BUNDLE'] = "YES"
           ENV['SCAN_RESULT_BUNDLE'] = "YES"
         end
@@ -88,16 +94,21 @@ module Fastlane
       end
 
       def self.details
+        list = <<-LIST.markdown_list(true)
+          Adds and unlocks keychains from Jenkins 'Keychains and Provisioning Profiles Plugin'
+          Sets unlocked keychain to be used by Match
+          Sets code signing identity from Jenkins 'Keychains and Provisioning Profiles Plugin'
+          Sets output directory to './output' (gym, scan and backup_xcarchive)
+          Sets derived data path to './derivedData' (xcodebuild, gym, scan and clear_derived_data, carthage)
+          Produce result bundle (gym and scan)
+        LIST
+
         [
-          "- Adds and unlocks keychains from Jenkins 'Keychains and Provisioning Profiles Plugin'",
-          "- Sets code signing identity from Jenkins 'Keychains and Provisioning Profiles Plugin'",
-          "- Sets output directory to './output' (gym, scan and backup_xcarchive).",
-          "- Sets derived data path to './derivedData' (xcodebuild, gym, scan and clear_derived_data, carthage).",
-          "- Produce result bundle (gym and scan).",
-          "",
+          list,
           "This action helps with Jenkins integration. Creates own derived data for each job. All build results like IPA files and archives will be stored in the `./output` directory.",
-          "The action also works with [Keychains and Provisioning Profiles Plugin](https://wiki.jenkins-ci.org/display/JENKINS/Keychains+and+Provisioning+Profiles+Plugin), selected keychain",
-          "will be automatically unlocked and the selected code signing identity will be used. By default this action will only work when fastlane is executed on a CI system."
+          "The action also works with [Keychains and Provisioning Profiles Plugin](https://wiki.jenkins-ci.org/display/JENKINS/Keychains+and+Provisioning+Profiles+Plugin), the selected keychain will be automatically unlocked and the selected code signing identity will be used.",
+          "[Match](https://docs.fastlane.tools/actions/match/) will be also set up to use the unlocked keychain and set in read-only mode, if its environment variables were not yet defined.",
+          "By default this action will only work when _fastlane_ is executed on a CI system."
         ].join("\n")
       end
 

@@ -2,13 +2,11 @@ module Fastlane
   module Actions
     class TestSampleCodeAction < Action
       def self.run(params)
-        content = File.read(params[:path])
-
+        content = params[:content] || File.read(params[:path])
         fill_in_env_variables
 
-        # /m says we ignore new line
         errors = []
-        content.scan(/```ruby\n([^`]*)\n```/m).each do |current_match|
+        content.scan(/```ruby\n(((.|\n)(?!```))*)\n```/).each do |current_match|
           current_match = current_match.first # we only expect one match
           next if current_match.include?("sh(") # we don't want to run any shell scripts
 
@@ -29,7 +27,7 @@ module Fastlane
           end
         end
 
-        UI.error("Found errors in the documentation, more information above") unless errors.empty?
+        UI.error("Found errors in the documentation, more information below") unless errors.empty?
         errors.each do |ex|
           UI.error(ex)
         end
@@ -40,7 +38,7 @@ module Fastlane
 
       # Is used to look if the method is implemented as an action
       def self.method_missing(method_sym, *arguments, &_block)
-        return if blacklist.include?(method_sym)
+        return if denylist.include?(method_sym)
 
         class_ref = self.runner.class_reference_from_action_name(method_sym)
         unless class_ref
@@ -61,8 +59,14 @@ module Fastlane
             config_item = available_options.find { |a| a.key == current_argument }
             UI.user_error!("Unknown parameter '#{current_argument}' for action '#{method_sym}'") if config_item.nil?
 
-            if config_item.data_type && !value.kind_of?(config_item.data_type) && !config_item.optional
-              UI.user_error!("'#{current_argument}' value must be a #{config_item.data_type}! Found #{value.class} instead.")
+            if value.nil? && config_item.optional
+              next
+            end
+
+            if config_item.data_type == Fastlane::Boolean
+              config_item.ensure_boolean_type_passes_validation(value)
+            else
+              config_item.ensure_generic_type_passes_validation(value)
             end
           end
         else
@@ -76,7 +80,7 @@ module Fastlane
       # This will still verify the syntax though
       # The actions listed here are still legacy actions, so
       # they don't use the fastlane configuration system
-      def self.blacklist
+      def self.denylist
         [
           :import,
           :xcode_select,
@@ -92,7 +96,8 @@ module Fastlane
       # Metadata
       def self.available_options
         [
-          FastlaneCore::ConfigItem.new(key: :path)
+          FastlaneCore::ConfigItem.new(key: :path),
+          FastlaneCore::ConfigItem.new(key: :content)
         ]
       end
 

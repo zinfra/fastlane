@@ -3,7 +3,10 @@ module Fastlane
     class ErbAction < Action
       def self.run(params)
         template = File.read(params[:template])
-        result =   ERB.new(template).result(OpenStruct.new(params[:placeholders]).instance_eval { binding })
+        trim_mode = params[:trim_mode]
+
+        result = Fastlane::ErbTemplateHelper.render(template, params[:placeholders], trim_mode)
+
         File.open(params[:destination], 'w') { |file| file.write(result) } if params[:destination]
         UI.message("Successfully parsed template: '#{params[:template]}' and rendered output to: #{params[:destination]}") if params[:destination]
         result
@@ -19,8 +22,8 @@ module Fastlane
 
       def self.details
         [
-          "Renders an ERB template with `placeholders` given as a hash via parameter,",
-          "if no :destination is set, returns rendered template as string"
+          "Renders an ERB template with `:placeholders` given as a hash via parameter.",
+          "If no `:destination` is set, it returns the rendered template as string."
         ].join("\n")
       end
 
@@ -45,7 +48,12 @@ module Fastlane
                                        description: "Placeholders given as a hash",
                                        default_value: {},
                                        is_string: false,
-                                       type: Hash)
+                                       type: Hash),
+          FastlaneCore::ConfigItem.new(key: :trim_mode,
+                                       short_option: "-t",
+                                       env_name: "FL_ERB_TRIM_MODE",
+                                       description: "Trim mode applied to the ERB",
+                                       optional: true)
 
         ]
       end

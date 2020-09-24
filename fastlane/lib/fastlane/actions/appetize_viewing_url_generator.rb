@@ -27,8 +27,8 @@ module Fastlane
         url_params << "launchUrl=#{params[:launch_url]}" if params[:launch_url]
         url_params << "language=#{params[:language]}" if params[:language]
         url_params << "osVersion=#{params[:os_version]}" if params[:os_version]
-        url_params << "params=#{CGI.escape params[:params]}" if params[:params]
-        url_params << "proxy=#{CGI.escape params[:proxy]}" if params[:proxy]
+        url_params << "params=#{CGI.escape(params[:params])}" if params[:params]
+        url_params << "proxy=#{CGI.escape(params[:proxy])}" if params[:proxy]
 
         return link + "?" + url_params.join("&")
       end
@@ -53,6 +53,7 @@ module Fastlane
                                        is_string: true,
                                        sensitive: true,
                                        default_value: Actions.lane_context[SharedValues::APPETIZE_PUBLIC_KEY],
+                                       default_value_dynamic: true,
                                        optional: false,
                                        verify_block: proc do |value|
                                          if value.start_with?("private_")
@@ -114,7 +115,7 @@ module Fastlane
                                        optional: true),
           FastlaneCore::ConfigItem.new(key: :params,
                                        env_name: "APPETIZE_VIEWING_URL_GENERATOR_PARAMS",
-                                       description: "Specifiy params value to be passed to Appetize",
+                                       description: "Specify params value to be passed to Appetize",
                                        is_string: true,
                                        optional: true),
           FastlaneCore::ConfigItem.new(key: :proxy,

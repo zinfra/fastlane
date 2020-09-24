@@ -1,3 +1,5 @@
+require "rubygems/requirement"
+
 module Fastlane
   class FastFile
     # Stores all relevant information from the currently running process
@@ -14,20 +16,25 @@ module Fastlane
       return unless (path || '').length > 0
       UI.user_error!("Could not find Fastfile at path '#{path}'") unless File.exist?(path)
       @path = File.expand_path(path)
-      content = File.read(path)
+      content = File.read(path, encoding: "utf-8")
 
       # From https://github.com/orta/danger/blob/master/lib/danger/Dangerfile.rb
       if content.tr!('“”‘’‛', %(""'''))
-        UI.error "Your #{File.basename(path)} has had smart quotes sanitised. " \
+        UI.error("Your #{File.basename(path)} has had smart quotes sanitised. " \
                 'To avoid issues in the future, you should not use ' \
                 'TextEdit for editing it. If you are not using TextEdit, ' \
-                'you should turn off smart quotes in your editor of choice.'
+                'you should turn off smart quotes in your editor of choice.')
       end
 
-      content.scan(/^\s*require (.*)/).each do |current|
+      content.scan(/^\s*require ["'](.*?)["']/).each do |current|
         gem_name = current.last
         next if gem_name.include?(".") # these are local gems
-        UI.important("You require a gem, if this is a third party gem, please use `fastlane_require #{gem_name}` to ensure the gem is installed locally")
+
+        begin
+          require(gem_name)
+        rescue LoadError
+          UI.important("You have required a gem, if this is a third party gem, please use `fastlane_require '#{gem_name}'` to ensure the gem is installed locally.")
+        end
       end
 
       parse(content, @path)
@@ -54,8 +61,14 @@ module Fastlane
           eval(data, parsing_binding, relative_path) # using eval is ok for this case
           # rubocop:enable Security/Eval
         rescue SyntaxError => ex
-          line = ex.to_s.match(/#{Regexp.escape(relative_path)}:(\d+)/)[1]
-          UI.user_error!("Syntax error in your Fastfile on line #{line}: #{ex}")
+          match = ex.to_s.match(/#{Regexp.escape(relative_path)}:(\d+)/)
+          if match
+            line = match[1]
+            UI.content_error(data, line)
+            UI.user_error!("Syntax error in your Fastfile on line #{line}: #{ex}")
+          else
+            UI.user_error!("Syntax error in your Fastfile: #{ex}")
+          end
         end
       end
 
@@ -150,10 +163,6 @@ module Fastlane
     # @!group Other things
     #####################################################
 
-    def collector
-      runner.collector
-    end
-
     # Is the given key a platform block or a lane?
     def is_platform_block?(key)
       UI.crash!('No key given') unless key
@@ -178,10 +187,36 @@ module Fastlane
     end
 
     # Execute shell command
-    def sh(command, log: true, error_callback: nil)
-      command_header = log ? command : "shell command"
+    # Accepts arguments with with and without the command named keyword so that sh
+    # behaves like other actions with named keywords
+    # https://github.com/fastlane/fastlane/issues/14930
+    #
+    # Example:
+    #  sh("ls")
+    #  sh("ls", log: false)
+    #  sh(command: "ls")
+    #  sh(command: "ls", step_name: "listing the files")
+    #  sh(command: "ls", log: false)
+    def sh(*args, &b)
+      # First accepts hash (or named keywords) like other actions
+      # Otherwise uses sh method that doesn't have an interface like an action
+      if args.count == 1 && args.first.kind_of?(Hash)
+        hash = args.first
+        command = hash.delete(:command)
+
+        raise ArgumentError, "sh requires :command keyword in argument" if command.nil?
+
+        new_args = [*command, hash]
+        FastFile.sh(*new_args, &b)
+      else
+        FastFile.sh(*args, &b)
+      end
+    end
+
+    def self.sh(*command, step_name: nil, log: true, error_callback: nil, &b)
+      command_header = log ? step_name || Actions.shell_command_from_args(*command) : "shell command"
       Actions.execute_action(command_header) do
-        Actions.sh_no_action(command, log: log, error_callback: error_callback)
+        Actions.sh_no_action(*command, log: log, error_callback: error_callback, &b)
       end
     end
 
@@ -198,9 +233,7 @@ module Fastlane
     end
 
     def generated_fastfile_id(id)
-      # This value helps us track success/failure metrics for Fastfiles we
-      # generate as part of an automated process.
-      ENV['GENERATED_FASTFILE_ID'] = id
+      UI.important("The `generated_fastfile_id` action was deprecated, you can remove the line from your `Fastfile`")
     end
 
     def import(path = nil)
@@ -217,50 +250,97 @@ module Fastlane
       actions_path = File.join(File.expand_path("..", path), 'actions')
       Fastlane::Actions.load_external_actions(actions_path) if File.directory?(actions_path)
 
-      collector.did_launch_action(:import)
-      parse(File.read(path), path)
+      action_launched('import')
+
+      return_value = parse(File.read(path), path)
+
+      action_completed('import', status: FastlaneCore::ActionCompletionStatus::SUCCESS)
+
+      return return_value
     end
 
     # @param url [String] The git URL to clone the repository from
     # @param branch [String] The branch to checkout in the repository
     # @param path [String] The path to the Fastfile
-    def import_from_git(url: nil, branch: 'HEAD', path: 'fastlane/Fastfile')
+    # @param version [String, Array] Version requirement for repo tags
+    def import_from_git(url: nil, branch: 'HEAD', path: 'fastlane/Fastfile', version: nil, dependencies: [])
       UI.user_error!("Please pass a path to the `import_from_git` action") if url.to_s.length == 0
 
       Actions.execute_action('import_from_git') do
         require 'tmpdir'
 
-        collector.did_launch_action(:import_from_git)
+        action_launched('import_from_git')
 
         # Checkout the repo
         repo_name = url.split("/").last
+        checkout_param = branch
 
         Dir.mktmpdir("fl_clone") do |tmp_path|
           clone_folder = File.join(tmp_path, repo_name)
 
-          branch_option = ""
           branch_option = "--branch #{branch}" if branch != 'HEAD'
 
-          clone_command = "GIT_TERMINAL_PROMPT=0 git clone '#{url}' '#{clone_folder}' --depth 1 -n #{branch_option}"
+          checkout_dependencies = dependencies.map(&:shellescape).join(" ")
 
-          UI.message "Cloning remote git repo..."
-          Actions.sh(clone_command)
+          checkout_path = "#{path.shellescape} #{checkout_dependencies}"
 
-          Actions.sh("cd '#{clone_folder}' && git checkout #{branch} '#{path}'")
+          UI.message("Cloning remote git repo...")
+          Helper.with_env_values('GIT_TERMINAL_PROMPT' => '0') do
+            Actions.sh("git clone #{url.shellescape} #{clone_folder.shellescape} --depth 1 -n #{branch_option}")
+          end
+
+          unless version.nil?
+            req = Gem::Requirement.new(version)
+            all_tags = fetch_remote_tags(folder: clone_folder)
+            checkout_param = all_tags.select { |t| req =~ FastlaneCore::TagVersion.new(t) }.last
+            UI.user_error!("No tag found matching #{version.inspect}") if checkout_param.nil?
+          end
+
+          Actions.sh("cd #{clone_folder.shellescape} && git checkout #{checkout_param.shellescape} #{checkout_path}")
 
           # We also want to check out all the local actions of this fastlane setup
           containing = path.split(File::SEPARATOR)[0..-2]
           containing = "." if containing.count == 0
           actions_folder = File.join(containing, "actions")
           begin
-            Actions.sh("cd '#{clone_folder}' && git checkout #{branch} '#{actions_folder}'")
+            Actions.sh("cd #{clone_folder.shellescape} && git checkout #{checkout_param.shellescape} #{actions_folder.shellescape}")
           rescue
             # We don't care about a failure here, as local actions are optional
           end
 
-          import(File.join(clone_folder, path))
+          return_value = nil
+          if dependencies.any?
+            return_value = [import(File.join(clone_folder, path))]
+            return_value += dependencies.map { |file_path| import(File.join(clone_folder, file_path)) }
+          else
+            return_value = import(File.join(clone_folder, path))
+          end
+
+          action_completed('import_from_git', status: FastlaneCore::ActionCompletionStatus::SUCCESS)
+
+          return return_value
         end
       end
+    end
+
+    #####################################################
+    # @!group Versioning helpers
+    #####################################################
+
+    def fetch_remote_tags(folder: nil)
+      UI.message("Fetching remote git tags...")
+      Helper.with_env_values('GIT_TERMINAL_PROMPT' => '0') do
+        Actions.sh("cd #{folder.shellescape} && git fetch --all --tags -q")
+      end
+
+      # Fetch all possible tags
+      git_tags_string = Actions.sh("cd #{folder.shellescape} && git tag -l")
+      git_tags = git_tags_string.split("\n")
+
+      # Sort tags based on their version number
+      return git_tags
+             .select { |tag| FastlaneCore::TagVersion.correct?(tag) }
+             .sort_by { |tag| FastlaneCore::TagVersion.new(tag) }
     end
 
     #####################################################
@@ -271,22 +351,38 @@ module Fastlane
     def say(value)
       # Overwrite this, since there is already a 'say' method defined in the Ruby standard library
       value ||= yield
-      Actions.execute_action('say') do
-        collector.did_launch_action(:say)
-        Fastlane::Actions::SayAction.run([value])
-      end
+
+      value = { text: value } if value.kind_of?(String) || value.kind_of?(Array)
+      self.runner.trigger_action_by_name(:say, nil, false, value)
     end
 
     def puts(value)
       # Overwrite this, since there is already a 'puts' method defined in the Ruby standard library
       value ||= yield if block_given?
-      collector.did_launch_action(:puts)
-      Fastlane::Actions::PutsAction.run([value])
+
+      action_launched('puts')
+      return_value = Fastlane::Actions::PutsAction.run([value])
+      action_completed('puts', status: FastlaneCore::ActionCompletionStatus::SUCCESS)
+      return return_value
     end
 
     def test(params = {})
       # Overwrite this, since there is already a 'test' method defined in the Ruby standard library
       self.runner.try_switch_to_lane(:test, [params])
+    end
+
+    def action_launched(action_name)
+      action_launch_context = FastlaneCore::ActionLaunchContext.context_for_action_name(action_name,
+                                                                                        fastlane_client_language: :ruby,
+                                                                                        args: ARGV)
+      FastlaneCore.session.action_launched(launch_context: action_launch_context)
+    end
+
+    def action_completed(action_name, status: nil)
+      completion_context = FastlaneCore::ActionCompletionContext.context_for_action_name(action_name,
+                                                                                         args: ARGV,
+                                                                                         status: status)
+      FastlaneCore.session.action_completed(completion_context: completion_context)
     end
   end
 end

@@ -1,3 +1,6 @@
+require 'fastlane_core/device_manager'
+require_relative 'module'
+
 module Snapshot
   class TestCommandGeneratorBase
     class << self
@@ -14,13 +17,26 @@ module Snapshot
         UI.user_error!("No project/workspace found")
       end
 
-      def options
+      def options(language, locale)
         config = Snapshot.config
+        result_bundle_path = resolve_result_bundle_path(language, locale) if config[:result_bundle]
+
         options = []
         options += project_path_array
         options << "-sdk '#{config[:sdk]}'" if config[:sdk]
-        options << "-derivedDataPath '#{derived_data_path}'"
+        if derived_data_path && !options.include?("-derivedDataPath #{derived_data_path.shellescape}")
+          options << "-derivedDataPath #{derived_data_path.shellescape}"
+        end
+        options << "-resultBundlePath '#{result_bundle_path}'" if result_bundle_path
+        if FastlaneCore::Helper.xcode_at_least?(11)
+          options << "-testPlan '#{config[:testplan]}'" if config[:testplan]
+        end
         options << config[:xcargs] if config[:xcargs]
+
+        # detect_values will ensure that these values are present as Arrays if
+        # they are present at all
+        options += config[:only_testing].map { |test_id| "-only-testing:#{test_id.shellescape}" } if config[:only_testing]
+        options += config[:skip_testing].map { |test_id| "-skip-testing:#{test_id.shellescape}" } if config[:skip_testing]
         return options
       end
 
@@ -36,10 +52,13 @@ module Snapshot
 
       def actions
         actions = []
-        actions << :clean if Snapshot.config[:clean]
-        actions << :build # https://github.com/fastlane/snapshot/issues/246
-        actions << :test
-
+        if Snapshot.config[:test_without_building]
+          actions << "test-without-building"
+        else
+          actions << :clean if Snapshot.config[:clean]
+          actions << :build # https://github.com/fastlane/fastlane/issues/2581
+          actions << :test
+        end
         return actions
       end
 
@@ -72,6 +91,21 @@ module Snapshot
 
       def derived_data_path
         Snapshot.cache[:derived_data_path] ||= (Snapshot.config[:derived_data_path] || Dir.mktmpdir("snapshot_derived"))
+      end
+
+      def resolve_result_bundle_path(language, locale)
+        Snapshot.cache[:result_bundle_path] = {}
+        language_key = locale || language
+
+        unless Snapshot.cache[:result_bundle_path][language_key]
+          ext = FastlaneCore::Helper.xcode_at_least?(11) ? '.xcresult' : '.test_result'
+          path = File.join(Snapshot.config[:output_directory], "test_output", language_key, Snapshot.config[:scheme]) + ext
+          if File.directory?(path)
+            FileUtils.remove_dir(path)
+          end
+          Snapshot.cache[:result_bundle_path][language_key] = path
+        end
+        return Snapshot.cache[:result_bundle_path][language_key]
       end
 
       def initialize

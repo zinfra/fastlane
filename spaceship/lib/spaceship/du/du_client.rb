@@ -1,3 +1,7 @@
+require_relative '../client'
+require_relative '../tunes/display_family'
+require_relative 'utilities'
+
 module Spaceship
   # This class is used to upload Digital files (Images, Videos, JSON files) onto the du-itc service.
   # Its implementation is tied to the tunes module (in particular using +AppVersion+ instances)
@@ -18,8 +22,12 @@ module Spaceship
       upload_file(app_version: app_version, upload_file: upload_file, path: '/upload/image', content_provider_id: content_provider_id, sso_token: sso_token_for_image, du_validation_rule_set: screenshot_picture_type(device, is_messages))
     end
 
+    def upload_purchase_merch_screenshot(app_id, upload_file, content_provider_id, sso_token_for_image)
+      upload_file(app_id: app_id, upload_file: upload_file, path: '/upload/image', content_provider_id: content_provider_id, sso_token: sso_token_for_image, du_validation_rule_set: 'MZPFT.MerchandisingIAPIcon')
+    end
+
     def upload_purchase_review_screenshot(app_id, upload_file, content_provider_id, sso_token_for_image)
-      upload_file(app_id: app_id, upload_file: upload_file, path: '/upload/image', content_provider_id: content_provider_id, sso_token: sso_token_for_image, du_validation_rule_set: 'MZPFT.SortedScreenShot')
+      upload_file(app_id: app_id, upload_file: upload_file, path: '/upload/image', content_provider_id: content_provider_id, sso_token: sso_token_for_image, du_validation_rule_set: get_picture_type(upload_file))
     end
 
     def upload_large_icon(app_version, upload_file, content_provider_id, sso_token_for_image)
@@ -42,6 +50,20 @@ module Spaceship
       upload_file(app_version: app_version, upload_file: upload_file, path: '/upload/image', content_provider_id: content_provider_id, sso_token: sso_token_for_image, du_validation_rule_set: screenshot_picture_type(device, nil))
     end
 
+    def upload_app_review_attachment(app_version, upload_file, content_provider_id, sso_token_for_attachment)
+      upload_file(app_version: app_version, upload_file: upload_file, path: '/upload/app-resolution-file', content_provider_id: content_provider_id, sso_token: sso_token_for_attachment)
+    end
+
+    def get_picture_type(upload_file)
+      resolution = Utilities.resolution(upload_file.file_path)
+      result = device_resolution_map.find do |key, resolutions|
+        resolutions.include?(resolution)
+      end
+      raise "Unknown device for screen resolution #{resolution}" if result.nil?
+
+      picture_type_map[result[0]]
+    end
+
     private
 
     def upload_file(app_version: nil, upload_file: nil, path: nil, content_provider_id: nil, sso_token: nil, du_validation_rule_set: nil, app_id: nil)
@@ -60,7 +82,7 @@ module Spaceship
       end
 
       r = request(:post) do |req|
-        req.url "#{self.class.hostname}#{path}"
+        req.url("#{self.class.hostname}#{path}")
         req.body = upload_file.bytes
         req.headers['Accept'] = 'application/json, text/plain, */*'
         req.headers['Content-Type'] = upload_file.content_type
@@ -76,45 +98,29 @@ module Spaceship
         req.headers['Connection'] = "keep-alive"
       end
 
-      if r.status == 500 and r.body.include?("Server Error")
+      if r.status == 500 && r.body.include?("Server Error")
         return upload_file(app_version: app_version, upload_file: upload_file, path: path, content_provider_id: content_provider_id, sso_token: sso_token, du_validation_rule_set: du_validation_rule_set, app_id: app_id)
       end
 
       parse_upload_response(r)
     end
 
-    # You can find this by uploading an image in iTunes connect
-    # then look for the X-Apple-Upload-Validation-RuleSets value
     def picture_type_map
-      # rubocop:enable Layout/ExtraSpacing
-      {
-        watch:        "MZPFT.SortedN27ScreenShot",
-        ipad:         "MZPFT.SortedTabletScreenShot",
-        ipadPro:      "MZPFT.SortedJ99ScreenShot",
-        iphone6:      "MZPFT.SortedN61ScreenShot",
-        iphone6Plus:  "MZPFT.SortedN56ScreenShot",
-        iphone4:      "MZPFT.SortedN41ScreenShot",
-        iphone35:     "MZPFT.SortedScreenShot",
-        appleTV:      "MZPFT.SortedATVScreenShot",
-        desktop:      "MZPFT.SortedDesktopScreenShot"
-      }
+      Spaceship::Tunes::DisplayFamily.all.map { |v| [v.name.to_sym, v.picture_type] }.to_h
     end
 
     def messages_picture_type_map
-      # rubocop:enable Layout/ExtraSpacing
-      {
-        ipad:         "MZPFT.SortedTabletMessagesScreenShot",
-        ipadPro:      "MZPFT.SortedJ99MessagesScreenShot",
-        iphone6:      "MZPFT.SortedN61MessagesScreenShot",
-        iphone6Plus:  "MZPFT.SortedN56MessagesScreenShot",
-        iphone4:      "MZPFT.SortedN41MessagesScreenShot"
-      }
+      Spaceship::Tunes::DisplayFamily.all.select(&:messages_supported?).map { |v| [v.name.to_sym, v.messages_picture_type] }.to_h
+    end
+
+    def device_resolution_map
+      Spaceship::Tunes::DisplayFamily.all.map { |v| [v.name.to_sym, v.screenshot_resolutions] }.to_h
     end
 
     def screenshot_picture_type(device, is_messages)
       map = is_messages ? messages_picture_type_map : picture_type_map
       device = device.to_sym
-      raise "Unknown picture type for device: #{device}" unless map.key? device
+      raise "Unknown picture type for device: #{device}" unless map.key?(device)
       map[device]
     end
 

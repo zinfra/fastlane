@@ -1,6 +1,11 @@
 require 'commander'
-require 'deliver/download_screenshots'
 require 'fastlane/version'
+
+require_relative 'download_screenshots'
+require_relative 'options'
+require_relative 'module'
+require_relative 'generate_summary'
+require_relative 'runner'
 
 HighLine.track_eof = false
 
@@ -35,22 +40,24 @@ module Deliver
       res
     end
 
+    # rubocop:disable Metrics/PerceivedComplexity
     def run
       program :name, 'deliver'
       program :version, Fastlane::VERSION
       program :description, Deliver::DESCRIPTION
       program :help, 'Author', 'Felix Krause <deliver@krausefx.com>'
       program :help, 'Website', 'https://fastlane.tools'
-      program :help, 'GitHub', 'https://github.com/fastlane/fastlane/tree/master/deliver#readme'
+      program :help, 'Documentation', 'https://docs.fastlane.tools/actions/deliver/'
       program :help_formatter, :compact
 
       global_option('--verbose') { FastlaneCore::Globals.verbose = true }
+      global_option('--env STRING[,STRING2]', String, 'Add environment(s) to use with `dotenv`')
 
       always_trace!
 
       command :run do |c|
         c.syntax = 'fastlane deliver'
-        c.description = 'Upload metadata and binary to iTunes Connect'
+        c.description = 'Upload metadata and binary to App Store Connect'
 
         FastlaneCore::CommanderGenerator.new.generate(deliverfile_options, command: c)
 
@@ -63,9 +70,10 @@ module Deliver
           loaded = true if File.exist?(File.join(FastlaneCore::FastlaneFolder.path || ".", "metadata"))
           unless loaded
             if UI.confirm("No deliver configuration found in the current directory. Do you want to setup deliver?")
+              is_swift = UI.confirm("Would you like to use Swift instead of Ruby?")
               require 'deliver/setup'
               Deliver::Runner.new(options) # to login...
-              Deliver::Setup.new.run(options)
+              Deliver::Setup.new.run(options, is_swift: is_swift)
               return 0
             end
           end
@@ -96,7 +104,7 @@ module Deliver
         FastlaneCore::CommanderGenerator.new.generate(deliverfile_options, command: c)
 
         c.action do |args, options|
-          if File.exist?("Deliverfile") or File.exist?("fastlane/Deliverfile")
+          if File.exist?("Deliverfile") || File.exist?("fastlane/Deliverfile")
             UI.important("You already have a running deliver setup in this directory")
             return 0
           end
@@ -122,14 +130,14 @@ module Deliver
           options.load_configuration_file("Deliverfile")
           Deliver::Runner.new(options)
           html_path = Deliver::GenerateSummary.new.run(options)
-          UI.success "Successfully generated HTML report at '#{html_path}'"
+          UI.success("Successfully generated HTML report at '#{html_path}'")
           system("open '#{html_path}'") unless options[:force]
         end
       end
 
       command :download_screenshots do |c|
         c.syntax = 'fastlane deliver download_screenshots'
-        c.description = "Downloads all existing screenshots from iTunes Connect and stores them in the screenshots folder"
+        c.description = "Downloads all existing screenshots from App Store Connect and stores them in the screenshots folder"
 
         FastlaneCore::CommanderGenerator.new.generate(deliverfile_options, command: c)
 
@@ -159,19 +167,21 @@ module Deliver
           return 0 unless res
 
           require 'deliver/setup'
-          v = options[:app].latest_version
+          app = options[:app]
+          platform = Spaceship::ConnectAPI::Platform.map(options[:platform])
+          v = app.get_latest_app_store_version(platform: platform)
           if options[:app_version].to_s.length > 0
-            v = options[:app].live_version if v.version != options[:app_version]
-            if v.version != options[:app_version]
+            v = app.get_live_app_store_version(platform: platform) if v.version_string != options[:app_version]
+            if v.nil? || v.version_string != options[:app_version]
               raise "Neither the current nor live version match specified app_version \"#{options[:app_version]}\""
             end
           end
 
-          Deliver::Setup.new.generate_metadata_files(v, path)
+          Deliver::Setup.new.generate_metadata_files(app, v, path)
         end
       end
 
-      default_command :run
+      default_command(:run)
 
       run!
     end

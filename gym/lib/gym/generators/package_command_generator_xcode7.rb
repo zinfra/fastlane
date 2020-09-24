@@ -5,6 +5,12 @@
 # `incompatible encoding regexp match (UTF-8 regexp with ASCII-8BIT string) (Encoding::CompatibilityError)`
 
 require 'tempfile'
+require 'xcodeproj'
+
+require 'fastlane_core/core_ext/cfpropertylist'
+require_relative '../module'
+require_relative '../error_handler'
+require_relative 'build_command_generator'
 
 module Gym
   # Responsible for building the fully working xcodebuild command
@@ -31,6 +37,7 @@ module Gym
         options << "-exportPath '#{temporary_output_path}'"
         options << "-toolchain '#{config[:toolchain]}'" if config[:toolchain]
         options << config[:export_xcargs] if config[:export_xcargs]
+        options << config[:xcargs] if config[:xcargs]
 
         options
       end
@@ -51,25 +58,51 @@ module Gym
       end
 
       def ipa_path
-        unless Gym.cache[:ipa_path]
-          path = Dir[File.join(temporary_output_path, "*.ipa")].last
-          # We need to process generic IPA
-          if path
-            # Try to find IPA file in the output directory, used when app thinning was not set
-            Gym.cache[:ipa_path] = File.join(temporary_output_path, "#{Gym.config[:output_name]}.ipa")
-            FileUtils.mv(path, Gym.cache[:ipa_path]) unless File.expand_path(path).casecmp(File.expand_path(Gym.cache[:ipa_path]).downcase).zero?
-          elsif Dir.exist?(apps_path)
-            # Try to find "generic" IPA file inside "Apps" folder, used when app thinning was set
-            files = Dir[File.join(apps_path, "*.ipa")]
-            # Generic IPA file doesn't have suffix so its name is the shortest
-            path = files.min_by(&:length)
-            Gym.cache[:ipa_path] = File.join(temporary_output_path, "#{Gym.config[:output_name]}.ipa")
-            FileUtils.cp(path, Gym.cache[:ipa_path]) unless File.expand_path(path).casecmp(File.expand_path(Gym.cache[:ipa_path]).downcase).zero?
-          else
-            ErrorHandler.handle_empty_archive unless path
-          end
+        path = Gym.cache[:ipa_path]
+        return path if path
+
+        path = Dir[File.join(temporary_output_path, "*.ipa")].last
+        # We need to process generic IPA
+        if path
+          # Try to find IPA file in the output directory, used when app thinning was not set
+          Gym.cache[:ipa_path] = File.join(temporary_output_path, "#{Gym.config[:output_name]}.ipa")
+          FileUtils.mv(path, Gym.cache[:ipa_path]) unless File.expand_path(path).casecmp(File.expand_path(Gym.cache[:ipa_path]).downcase).zero?
+        elsif Dir.exist?(apps_path)
+          # Try to find "generic" IPA file inside "Apps" folder, used when app thinning was set
+          files = Dir[File.join(apps_path, "*.ipa")]
+          # Generic IPA file doesn't have suffix so its name is the shortest
+          path = files.min_by(&:length)
+          Gym.cache[:ipa_path] = File.join(temporary_output_path, "#{Gym.config[:output_name]}.ipa")
+          FileUtils.cp(path, Gym.cache[:ipa_path]) unless File.expand_path(path).casecmp(File.expand_path(Gym.cache[:ipa_path]).downcase).zero?
+        else
+          ErrorHandler.handle_empty_archive unless path
         end
+
         Gym.cache[:ipa_path]
+      end
+
+      def pkg_path
+        path = Gym.cache[:pkg_path]
+        return path if path
+
+        path = Dir[File.join(temporary_output_path, "*.pkg")].last
+        # We need to process generic PKG
+        if path
+          # Try to find PKG file in the output directory, used when app thinning was not set
+          Gym.cache[:pkg_path] = File.join(temporary_output_path, "#{Gym.config[:output_name]}.pkg")
+          FileUtils.mv(path, Gym.cache[:pkg_path]) unless File.expand_path(path).casecmp(File.expand_path(Gym.cache[:pkg_path]).downcase).zero?
+        elsif Dir.exist?(apps_path)
+          # Try to find "generic" PKG file inside "Apps" folder, used when app thinning was set
+          files = Dir[File.join(apps_path, "*.pkg")]
+          # Generic PKG file doesn't have suffix so its name is the shortest
+          path = files.min_by(&:length)
+          Gym.cache[:pkg_path] = File.join(temporary_output_path, "#{Gym.config[:output_name]}.pkg")
+          FileUtils.cp(path, Gym.cache[:pkg_path]) unless File.expand_path(path).casecmp(File.expand_path(Gym.cache[:pkg_path]).downcase).zero?
+        else
+          ErrorHandler.handle_empty_archive unless path
+        end
+
+        Gym.cache[:pkg_path]
       end
 
       # The path the the dsym file for this app. Might be nil
@@ -103,6 +136,15 @@ module Gym
         Gym.cache[:apps_path] ||= File.join(temporary_output_path, "Apps")
       end
 
+      # The path to the Apps folder
+      def asset_packs_path
+        Gym.cache[:asset_packs_path] ||= File.join(temporary_output_path, "OnDemandResources")
+      end
+
+      def appstore_info_path
+        Gym.cache[:appstore_info_path] ||= File.join(temporary_output_path, "AppStoreInfo.plist")
+      end
+
       private
 
       def normalize_export_options(hash)
@@ -117,27 +159,10 @@ module Gym
         hash
       end
 
-      def keys_to_symbols(hash)
-        # Convert keys to symbols
-        hash = hash.each_with_object({}) do |(k, v), memo|
-          memo[k.to_sym] = v
-          memo
-        end
-        hash
-      end
-
       def read_export_options
         # Reads export options
         if Gym.config[:export_options]
-          if Gym.config[:export_options].kind_of?(Hash)
-            # Reads options from hash
-            hash = normalize_export_options(Gym.config[:export_options])
-          else
-            # Reads options from file
-            hash = Plist.parse_xml(Gym.config[:export_options])
-            # Convert keys to symbols
-            hash = keys_to_symbols(hash)
-          end
+          hash = normalize_export_options(Gym.config[:export_options])
 
           # Saves configuration for later use
           Gym.config[:export_method] ||= hash[:method] || DEFAULT_EXPORT_METHOD
@@ -155,8 +180,6 @@ module Gym
       end
 
       def config_content
-        require 'plist'
-
         hash = read_export_options
 
         # Overrides export options if needed
@@ -165,6 +188,17 @@ module Gym
           hash[:uploadSymbols] = (Gym.config[:include_symbols] ? true : false) unless Gym.config[:include_symbols].nil?
           hash[:uploadBitcode] = (Gym.config[:include_bitcode] ? true : false) unless Gym.config[:include_bitcode].nil?
         end
+
+        # xcodebuild will not use provisioning profiles
+        # if we don't specify signingStyle as manual
+        if Helper.xcode_at_least?("9.0") && hash[:provisioningProfiles]
+          hash[:signingStyle] = 'manual'
+        end
+
+        if Gym.config[:installer_cert_name] && (Gym.project.mac? || Gym.building_mac_catalyst_for_mac?)
+          hash[:installerSigningCertificate] = Gym.config[:installer_cert_name]
+        end
+
         hash[:teamID] = Gym.config[:export_team_id] if Gym.config[:export_team_id]
 
         UI.important("Generated plist file with the following values:")
@@ -174,16 +208,24 @@ module Gym
         if FastlaneCore::Globals.verbose?
           UI.message("This results in the following plist file:")
           UI.command_output("-----------------------------------------")
-          UI.command_output(to_plist(hash))
+          UI.command_output(hash.to_plist)
           UI.command_output("-----------------------------------------")
         end
 
-        to_plist(hash)
+        hash.to_plist
       end
 
-      # Avoids a Hash#to_plist conflict between CFPropertyList and plist gems
-      def to_plist(hash)
-        Plist::Emit.dump(hash, true)
+      def signing_style
+        projects = Gym.project.project_paths
+        project = projects.first
+        xcodeproj = Xcodeproj::Project.open(project)
+        xcodeproj.root_object.attributes["TargetAttributes"].each do |target, sett|
+          return sett["ProvisioningStyle"].to_s.downcase
+        end
+      rescue => e
+        UI.verbose(e.to_s)
+        UI.error("Unable to read provisioning style from .pbxproj file.")
+        return "automatic"
       end
     end
   end

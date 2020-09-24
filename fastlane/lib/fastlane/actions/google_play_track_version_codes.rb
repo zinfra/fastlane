@@ -9,7 +9,8 @@ module Fastlane
         :issuer,
         :json_key,
         :json_key_data,
-        :root_url
+        :root_url,
+        :timeout
       ]
 
       def self.run(params)
@@ -19,7 +20,11 @@ module Fastlane
 
         Supply.config = params
 
-        Supply::Reader.new.track_version_codes
+        # AndroidpublisherV3 returns version codes as array of strings
+        # even though version codes need to be integers
+        # https://github.com/fastlane/fastlane/issues/15622
+        version_codes = Supply::Reader.new.track_version_codes || []
+        return version_codes.compact.map(&:to_i)
       end
 
       #####################################################
@@ -31,7 +36,7 @@ module Fastlane
       end
 
       def self.details
-        "More information: https://github.com/fastlane/fastlane/tree/master/supply"
+        "More information: [https://docs.fastlane.tools/actions/supply/](https://docs.fastlane.tools/actions/supply/)"
       end
 
       def self.available_options

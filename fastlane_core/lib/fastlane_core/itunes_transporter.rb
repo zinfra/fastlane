@@ -1,7 +1,10 @@
-require 'pty'
 require 'shellwords'
 require 'fileutils'
 require 'credentials_manager/account_manager'
+
+require_relative 'features'
+require_relative 'helper'
+require_relative 'fastlane_pty'
 
 module FastlaneCore
   # The TransporterInputError occurs when you passed wrong inputs to the {Deliver::ItunesTransporter}
@@ -28,7 +31,10 @@ module FastlaneCore
     private_constant :ERROR_REGEX, :WARNING_REGEX, :OUTPUT_REGEX, :RETURN_VALUE_REGEX, :SKIP_ERRORS
 
     def execute(command, hide_output)
-      return command if Helper.is_test?
+      if Helper.test?
+        yield(nil) if block_given?
+        return command
+      end
 
       @errors = []
       @warnings = []
@@ -36,29 +42,25 @@ module FastlaneCore
 
       if hide_output
         # Show a one time message instead
-        UI.success("Waiting for iTunes Connect transporter to be finished.")
+        UI.success("Waiting for App Store Connect transporter to be finished.")
         UI.success("iTunes Transporter progress... this might take a few minutes...")
       end
 
       begin
-        PTY.spawn(command) do |stdin, stdout, pid|
+        exit_status = FastlaneCore::FastlanePty.spawn(command) do |command_stdout, command_stdin, pid|
           begin
-            stdin.each do |line|
+            command_stdout.each do |line|
               @all_lines << line
               parse_line(line, hide_output) # this is where the parsing happens
             end
-          rescue Errno::EIO
-            # Exception ignored intentionally.
-            # https://stackoverflow.com/questions/10238298/ruby-on-linux-pty-goes-away-without-eof-raises-errnoeio
-          ensure
-            Process.wait(pid)
           end
         end
       rescue => ex
+        # FastlanePty adds exit_status on to StandardError so every error will have a status code
+        exit_status = ex.exit_status
         @errors << ex.to_s
       end
 
-      exit_status = $?.exitstatus
       unless exit_status.zero?
         @errors << "The call to the iTMSTransporter completed with a non-zero exit status: #{exit_status}. This indicates a failure."
       end
@@ -88,7 +90,8 @@ module FastlaneCore
         UI.important("Although errors occurred during execution of iTMSTransporter, it returned success status.")
       end
 
-      exit_status.zero?
+      yield(@all_lines) if block_given?
+      return exit_status.zero?
     end
 
     private
@@ -107,10 +110,10 @@ module FastlaneCore
         UI.error("[Transporter Error Output]: #{$1}")
 
         # Check if it's a login error
-        if $1.include? "Your Apple ID or password was entered incorrectly" or
-           $1.include? "This Apple ID has been locked for security reasons"
+        if $1.include?("Your Apple ID or password was entered incorrectly") ||
+           $1.include?("This Apple ID has been locked for security reasons")
 
-          unless Helper.is_test?
+          unless Helper.test?
             CredentialsManager::AccountManager.new(user: @user).invalid_credentials
             UI.error("Please run this tool again to apply the new password")
           end
@@ -137,122 +140,230 @@ module FastlaneCore
         end
       end
 
-      if !hide_output and line =~ OUTPUT_REGEX
+      if !hide_output && line =~ OUTPUT_REGEX
         # General logging for debug purposes
         unless output_done
           UI.verbose("[Transporter]: #{$1}")
         end
       end
     end
+
+    def additional_upload_parameters
+      # As Apple recommends in Transporter User Guide we shouldn't specify the -t transport parameter
+      # and instead allow Transporter to use automatic transport discovery
+      # to determine the best transport mode for packages.
+      # It became crucial after WWDC 2020 as it leaded to "Broken pipe (Write failed)" exception
+      # More information https://github.com/fastlane/fastlane/issues/16749
+      env_deliver_additional_params = ENV["DELIVER_ITMSTRANSPORTER_ADDITIONAL_UPLOAD_PARAMETERS"]
+      if env_deliver_additional_params.to_s.strip.empty?
+        return nil
+      end
+
+      deliver_additional_params = env_deliver_additional_params.to_s.strip
+      if !deliver_additional_params.include?("-t ")
+        UI.user_error!("Invalid transport parameter")
+      else
+        return deliver_additional_params
+      end
+    end
   end
 
   # Generates commands and executes the iTMSTransporter through the shell script it provides by the same name
   class ShellScriptTransporterExecutor < TransporterExecutor
-    def build_upload_command(username, password, source = "/tmp", provider_short_name = "")
+    def build_upload_command(username, password, source = "/tmp", provider_short_name = "", jwt = nil)
+      use_jwt = !jwt.to_s.empty?
       [
         '"' + Helper.transporter_path + '"',
         "-m upload",
-        "-u \"#{username}\"",
-        "-p #{shell_escaped_password(password)}",
-        "-f '#{source}'",
-        ENV["DELIVER_ITMSTRANSPORTER_ADDITIONAL_UPLOAD_PARAMETERS"], # that's here, because the user might overwrite the -t option
-        "-t 'Signiant'",
+        ("-u #{username.shellescape}" unless use_jwt),
+        ("-p #{shell_escaped_password(password)}" unless use_jwt),
+        ("-jwt #{jwt}" if use_jwt),
+        "-f \"#{source}\"",
+        additional_upload_parameters, # that's here, because the user might overwrite the -t option
         "-k 100000",
-        ("-itc_provider #{provider_short_name}" unless provider_short_name.to_s.empty?)
+        ("-WONoPause true" if Helper.windows?), # Windows only: process instantly returns instead of waiting for key press
+        ("-itc_provider #{provider_short_name}" if jwt.nil? && !provider_short_name.to_s.empty?)
       ].compact.join(' ')
     end
 
-    def build_download_command(username, password, apple_id, destination = "/tmp", provider_short_name = "")
+    def build_download_command(username, password, apple_id, destination = "/tmp", provider_short_name = "", jwt = nil)
+      use_jwt = !jwt.to_s.empty?
       [
         '"' + Helper.transporter_path + '"',
         "-m lookupMetadata",
-        "-u \"#{username}\"",
-        "-p #{shell_escaped_password(password)}",
+        ("-u #{username.shellescape}" unless use_jwt),
+        ("-p #{shell_escaped_password(password)}" unless use_jwt),
+        ("-jwt #{jwt}" if use_jwt),
         "-apple_id #{apple_id}",
         "-destination '#{destination}'",
-        ("-itc_provider #{provider_short_name}" unless provider_short_name.to_s.empty?)
+        ("-itc_provider #{provider_short_name}" if jwt.nil? && !provider_short_name.to_s.empty?)
+      ].compact.join(' ')
+    end
+
+    def build_provider_ids_command(username, password, jwt = nil)
+      use_jwt = !jwt.to_s.empty?
+      [
+        '"' + Helper.transporter_path + '"',
+        '-m provider',
+        ("-u \"#{username.shellescape}\"" unless use_jwt),
+        ("-p #{shell_escaped_password(password)}" unless use_jwt),
+        ("-jwt #{jwt}" if use_jwt)
       ].compact.join(' ')
     end
 
     def handle_error(password)
       # rubocop:disable Style/CaseEquality
-      unless password === /^[0-9a-zA-Z\.\$\_]*$/
+      # rubocop:disable Style/YodaCondition
+      unless /^[0-9a-zA-Z\.\$\_\-]*$/ === password
         UI.error([
           "Password contains special characters, which may not be handled properly by iTMSTransporter.",
-          "If you experience problems uploading to iTunes Connect, please consider changing your password to something with only alphanumeric characters."
+          "If you experience problems uploading to App Store Connect, please consider changing your password to something with only alphanumeric characters."
         ].join(' '))
       end
       # rubocop:enable Style/CaseEquality
-      UI.error("Could not download/upload from iTunes Connect! It's probably related to your password or your internet connection.")
+      # rubocop:enable Style/YodaCondition
+
+      UI.error("Could not download/upload from App Store Connect! It's probably related to your password or your internet connection.")
     end
 
     private
 
     def shell_escaped_password(password)
-      # because the shell handles passwords with single-quotes incorrectly, use gsub to replace ShellEscape'd single-quotes of this form:
-      #    \'
-      # with a sequence that wraps the escaped single-quote in double-quotes:
-      #    '"\'"'
-      # this allows us to properly handle passwords with single-quotes in them
-      # we use the 'do' version of gsub, because two-param version interprets the replace text as a pattern and does the wrong thing
-      password = Shellwords.escape(password).gsub("\\'") do
-        "'\"\\'\"'"
-      end
+      password = password.shellescape
+      unless Helper.windows?
+        # because the shell handles passwords with single-quotes incorrectly, use `gsub` to replace `shellescape`'d single-quotes of this form:
+        #    \'
+        # with a sequence that wraps the escaped single-quote in double-quotes:
+        #    '"\'"'
+        # this allows us to properly handle passwords with single-quotes in them
+        # background: https://stackoverflow.com/questions/1250079/how-to-escape-single-quotes-within-single-quoted-strings/1250098#1250098
+        password = password.gsub("\\'") do
+          # we use the 'do' version of gsub, because two-param version interprets the replace text as a pattern and does the wrong thing
+          "'\"\\'\"'"
+        end
 
-      # wrap the fully-escaped password in single quotes, since the transporter expects a escaped password string (which must be single-quoted for the shell's benefit)
-      "'" + password + "'"
+        # wrap the fully-escaped password in single quotes, since the transporter expects a escaped password string (which must be single-quoted for the shell's benefit)
+        password = "'" + password + "'"
+      end
+      return password
     end
   end
 
   # Generates commands and executes the iTMSTransporter by invoking its Java app directly, to avoid the crazy parameter
   # escaping problems in its accompanying shell script.
   class JavaTransporterExecutor < TransporterExecutor
-    def build_upload_command(username, password, source = "/tmp", provider_short_name = "")
-      [
-        Helper.transporter_java_executable_path.shellescape,
-        "-Djava.ext.dirs=#{Helper.transporter_java_ext_dir.shellescape}",
-        '-XX:NewSize=2m',
-        '-Xms32m',
-        '-Xmx1024m',
-        '-Xms1024m',
-        '-Djava.awt.headless=true',
-        '-Dsun.net.http.retryPost=false',
-        java_code_option,
-        '-m upload',
-        "-u #{username.shellescape}",
-        "-p #{password.shellescape}",
-        "-f #{source.shellescape}",
-        ENV["DELIVER_ITMSTRANSPORTER_ADDITIONAL_UPLOAD_PARAMETERS"], # that's here, because the user might overwrite the -t option
-        '-t Signiant',
-        '-k 100000',
-        ("-itc_provider #{provider_short_name}" unless provider_short_name.to_s.empty?),
-        '2>&1' # cause stderr to be written to stdout
-      ].compact.join(' ') # compact gets rid of the possibly nil ENV value
+    def build_upload_command(username, password, source = "/tmp", provider_short_name = "", jwt = nil)
+      use_jwt = !jwt.to_s.empty?
+      if Helper.mac? && Helper.xcode_at_least?(11)
+        [
+          ("ITMS_TRANSPORTER_PASSWORD=#{password.shellescape}" unless use_jwt),
+          'xcrun iTMSTransporter',
+          '-m upload',
+          ("-u #{username.shellescape}" unless use_jwt),
+          ("-p @env:ITMS_TRANSPORTER_PASSWORD" unless use_jwt),
+          ("-jwt #{jwt}" if use_jwt),
+          "-f #{source.shellescape}",
+          additional_upload_parameters, # that's here, because the user might overwrite the -t option
+          '-k 100000',
+          ("-itc_provider #{provider_short_name}" if jwt.nil? && !provider_short_name.to_s.empty?),
+          '2>&1' # cause stderr to be written to stdout
+        ].compact.join(' ') # compact gets rid of the possibly nil ENV value
+      else
+        [
+          Helper.transporter_java_executable_path.shellescape,
+          "-Djava.ext.dirs=#{Helper.transporter_java_ext_dir.shellescape}",
+          '-XX:NewSize=2m',
+          '-Xms32m',
+          '-Xmx1024m',
+          '-Xms1024m',
+          '-Djava.awt.headless=true',
+          '-Dsun.net.http.retryPost=false',
+          java_code_option,
+          '-m upload',
+          ("-u #{username.shellescape}" unless use_jwt),
+          ("-p #{password.shellescape}" unless use_jwt),
+          ("-jwt #{jwt}" if use_jwt),
+          "-f #{source.shellescape}",
+          additional_upload_parameters, # that's here, because the user might overwrite the -t option
+          '-k 100000',
+          ("-itc_provider #{provider_short_name}" if jwt.nil? && !provider_short_name.to_s.empty?),
+          '2>&1' # cause stderr to be written to stdout
+        ].compact.join(' ') # compact gets rid of the possibly nil ENV value
+      end
     end
 
-    def build_download_command(username, password, apple_id, destination = "/tmp", provider_short_name = "")
-      [
-        Helper.transporter_java_executable_path.shellescape,
-        "-Djava.ext.dirs=#{Helper.transporter_java_ext_dir.shellescape}",
-        '-XX:NewSize=2m',
-        '-Xms32m',
-        '-Xmx1024m',
-        '-Xms1024m',
-        '-Djava.awt.headless=true',
-        '-Dsun.net.http.retryPost=false',
-        java_code_option,
-        '-m lookupMetadata',
-        "-u #{username.shellescape}",
-        "-p #{password.shellescape}",
-        "-apple_id #{apple_id.shellescape}",
-        "-destination #{destination.shellescape}",
-        ("-itc_provider #{provider_short_name}" unless provider_short_name.to_s.empty?),
-        '2>&1' # cause stderr to be written to stdout
-      ].compact.join(' ')
+    def build_download_command(username, password, apple_id, destination = "/tmp", provider_short_name = "", jwt = nil)
+      use_jwt = !jwt.to_s.empty?
+      if Helper.mac? && Helper.xcode_at_least?(11)
+        [
+          ("ITMS_TRANSPORTER_PASSWORD=#{password.shellescape}" unless use_jwt),
+          'xcrun iTMSTransporter',
+          '-m lookupMetadata',
+          ("-u #{username.shellescape}" unless use_jwt),
+          ("-p @env:ITMS_TRANSPORTER_PASSWORD" unless use_jwt),
+          ("-jwt #{jwt}" if use_jwt),
+          "-apple_id #{apple_id.shellescape}",
+          "-destination #{destination.shellescape}",
+          ("-itc_provider #{provider_short_name}" if jwt.nil? && !provider_short_name.to_s.empty?),
+          '2>&1' # cause stderr to be written to stdout
+        ].compact.join(' ')
+      else
+        [
+          Helper.transporter_java_executable_path.shellescape,
+          "-Djava.ext.dirs=#{Helper.transporter_java_ext_dir.shellescape}",
+          '-XX:NewSize=2m',
+          '-Xms32m',
+          '-Xmx1024m',
+          '-Xms1024m',
+          '-Djava.awt.headless=true',
+          '-Dsun.net.http.retryPost=false',
+          java_code_option,
+          '-m lookupMetadata',
+          ("-u #{username.shellescape}" unless use_jwt),
+          ("-p #{password.shellescape}" unless use_jwt),
+          ("-jwt #{jwt}" if use_jwt),
+          "-apple_id #{apple_id.shellescape}",
+          "-destination #{destination.shellescape}",
+          ("-itc_provider #{provider_short_name}" if jwt.nil? && !provider_short_name.to_s.empty?),
+          '2>&1' # cause stderr to be written to stdout
+        ].compact.join(' ')
+      end
+    end
+
+    def build_provider_ids_command(username, password, jwt = nil)
+      use_jwt = !jwt.to_s.empty?
+      if Helper.mac? && Helper.xcode_at_least?(11)
+        [
+          ("ITMS_TRANSPORTER_PASSWORD=#{password.shellescape}" unless use_jwt),
+          'xcrun iTMSTransporter',
+          '-m provider',
+          ("-u #{username.shellescape}" unless use_jwt),
+          ("-p @env:ITMS_TRANSPORTER_PASSWORD" unless use_jwt),
+          ("-jwt #{jwt}" if use_jwt),
+          '2>&1' # cause stderr to be written to stdout
+        ].compact.join(' ')
+      else
+        [
+          Helper.transporter_java_executable_path.shellescape,
+          "-Djava.ext.dirs=#{Helper.transporter_java_ext_dir.shellescape}",
+          '-XX:NewSize=2m',
+          '-Xms32m',
+          '-Xmx1024m',
+          '-Xms1024m',
+          '-Djava.awt.headless=true',
+          '-Dsun.net.http.retryPost=false',
+          java_code_option,
+          '-m provider',
+          ("-u #{username.shellescape}" unless use_jwt),
+          ("-p #{password.shellescape}" unless use_jwt),
+          ("-jwt #{jwt}" if use_jwt),
+          '2>&1' # cause stderr to be written to stdout
+        ].compact.join(' ')
+      end
     end
 
     def java_code_option
-      if Helper.is_mac? && Helper.xcode_at_least?(9)
+      if Helper.mac? && Helper.xcode_at_least?(9)
         return "-jar #{Helper.transporter_java_jar_path.shellescape}"
       else
         return "-classpath #{Helper.transporter_java_jar_path.shellescape} com.apple.transporter.Application"
@@ -278,6 +389,8 @@ module FastlaneCore
   end
 
   class ItunesTransporter
+    # Matches a line in the provider table: "12  Initech Systems Inc     LG89CQY559"
+    PROVIDER_REGEX = /^\d+\s{2,}.+\s{2,}[^\s]+$/
     TWO_STEP_HOST_PREFIX = "deliver.appspecific"
 
     # This will be called from the Deliverfile, and disables the logging of the transporter output
@@ -301,14 +414,19 @@ module FastlaneCore
     #                            see: https://github.com/fastlane/fastlane/issues/1524#issuecomment-196370628
     #                            for more information about how to use the iTMSTransporter to list your provider
     #                            short names
-    def initialize(user = nil, password = nil, use_shell_script = false, provider_short_name = nil)
+    def initialize(user = nil, password = nil, use_shell_script = false, provider_short_name = nil, jwt = nil)
       # Xcode 6.x doesn't have the same iTMSTransporter Java setup as later Xcode versions, so
-      # we can't default to using the better direct Java invocation strategy for those versions.
+      # we can't default to using the newer direct Java invocation strategy for those versions.
       use_shell_script ||= Helper.is_mac? && Helper.xcode_version.start_with?('6.')
+      use_shell_script ||= Helper.windows?
       use_shell_script ||= Feature.enabled?('FASTLANE_ITUNES_TRANSPORTER_USE_SHELL_SCRIPT')
 
-      @user = user
-      @password = password || load_password_for_transporter
+      if jwt.to_s.empty?
+        @user = user
+        @password = password || load_password_for_transporter
+      end
+
+      @jwt = jwt
 
       @transporter_executor = use_shell_script ? ShellScriptTransporterExecutor.new : JavaTransporterExecutor.new
       @provider_short_name = provider_short_name
@@ -323,9 +441,12 @@ module FastlaneCore
     def download(app_id, dir = nil)
       dir ||= "/tmp"
 
-      UI.message("Going to download app metadata from iTunes Connect")
-      command = @transporter_executor.build_download_command(@user, @password, app_id, dir, @provider_short_name)
-      UI.verbose(@transporter_executor.build_download_command(@user, 'YourPassword', app_id, dir, @provider_short_name))
+      password_placeholder = @jwt.nil? ? 'YourPassword' : nil
+      jwt_placeholder = @jwt.nil? ? nil : 'YourJWT'
+
+      UI.message("Going to download app metadata from App Store Connect")
+      command = @transporter_executor.build_download_command(@user, @password, app_id, dir, @provider_short_name, @jwt)
+      UI.verbose(@transporter_executor.build_download_command(@user, password_placeholder, app_id, dir, @provider_short_name, jwt_placeholder))
 
       begin
         result = @transporter_executor.execute(command, ItunesTransporter.hide_transporter_output?)
@@ -334,13 +455,13 @@ module FastlaneCore
         return download(app_id, dir)
       end
 
-      return result if Helper.is_test?
+      return result if Helper.test?
 
       itmsp_path = File.join(dir, "#{app_id}.itmsp")
       successful = result && File.directory?(itmsp_path)
 
       if successful
-        UI.success("✅ Successfully downloaded the latest package from iTunes Connect to #{itmsp_path}")
+        UI.success("✅ Successfully downloaded the latest package from App Store Connect to #{itmsp_path}")
       else
         handle_error(@password)
       end
@@ -348,7 +469,7 @@ module FastlaneCore
       successful
     end
 
-    # Uploads the modified package back to iTunes Connect
+    # Uploads the modified package back to App Store Connect
     # @param app_id [Integer] The unique App ID
     # @param dir [String] the path in which the package file is located
     # @return (Bool) True if everything worked fine
@@ -357,11 +478,14 @@ module FastlaneCore
     def upload(app_id, dir)
       actual_dir = File.join(dir, "#{app_id}.itmsp")
 
-      UI.message("Going to upload updated app to iTunes Connect")
+      UI.message("Going to upload updated app to App Store Connect")
       UI.success("This might take a few minutes. Please don't interrupt the script.")
 
-      command = @transporter_executor.build_upload_command(@user, @password, actual_dir, @provider_short_name)
-      UI.verbose(@transporter_executor.build_upload_command(@user, 'YourPassword', actual_dir, @provider_short_name))
+      password_placeholder = @jwt.nil? ? 'YourPassword' : nil
+      jwt_placeholder = @jwt.nil? ? nil : 'YourJWT'
+
+      command = @transporter_executor.build_upload_command(@user, @password, actual_dir, @provider_short_name, @jwt)
+      UI.verbose(@transporter_executor.build_upload_command(@user, password_placeholder, actual_dir, @provider_short_name, jwt_placeholder))
 
       begin
         result = @transporter_executor.execute(command, ItunesTransporter.hide_transporter_output?)
@@ -371,14 +495,33 @@ module FastlaneCore
       end
 
       if result
-        UI.header("Successfully uploaded package to iTunes Connect. It might take a few minutes until it's visible online.")
+        UI.header("Successfully uploaded package to App Store Connect. It might take a few minutes until it's visible online.")
 
-        FileUtils.rm_rf(actual_dir) unless Helper.is_test? # we don't need the package any more, since the upload was successful
+        FileUtils.rm_rf(actual_dir) unless Helper.test? # we don't need the package any more, since the upload was successful
       else
         handle_error(@password)
       end
 
       result
+    end
+
+    def provider_ids
+      password_placeholder = @jwt.nil? ? 'YourPassword' : nil
+      jwt_placeholder = @jwt.nil? ? nil : 'YourJWT'
+
+      command = @transporter_executor.build_provider_ids_command(@user, @password, @jwt)
+      UI.verbose(@transporter_executor.build_provider_ids_command(@user, password_placeholder, jwt_placeholder))
+
+      lines = []
+      begin
+        result = @transporter_executor.execute(command, ItunesTransporter.hide_transporter_output?) { |xs| lines = xs }
+        return result if Helper.test?
+      rescue TransporterRequiresApplicationSpecificPasswordError => ex
+        handle_two_step_failure(ex)
+        return provider_ids
+      end
+
+      lines.map { |line| provider_pair(line) }.compact.to_h
     end
 
     private
@@ -408,8 +551,11 @@ module FastlaneCore
     def handle_two_step_failure(ex)
       if ENV[TWO_FACTOR_ENV_VARIABLE].to_s.length > 0
         # Password provided, however we already used it
-        UI.error("Application specific password you provided using #{TWO_FACTOR_ENV_VARIABLE}")
+        UI.error("")
+        UI.error("Application specific password you provided using")
+        UI.error("environment variable #{TWO_FACTOR_ENV_VARIABLE}")
         UI.error("is invalid, please make sure it's correct")
+        UI.error("")
         UI.user_error!("Invalid application specific password provided")
       end
 
@@ -422,10 +568,12 @@ module FastlaneCore
         UI.error("Please make sure to follow the instructions")
         a.remove_from_keychain
       end
+      UI.error("")
       UI.error("Your account has 2 step verification enabled")
       UI.error("Please go to https://appleid.apple.com/account/manage")
       UI.error("and generate an application specific password for")
       UI.error("the iTunes Transporter, which is used to upload builds")
+      UI.error("")
       UI.error("To set the application specific password on a CI machine using")
       UI.error("an environment variable, you can set the")
       UI.error("#{TWO_FACTOR_ENV_VARIABLE} variable")
@@ -436,6 +584,12 @@ module FastlaneCore
 
     def handle_error(password)
       @transporter_executor.handle_error(password)
+    end
+
+    def provider_pair(line)
+      line = line.strip
+      return nil unless line =~ PROVIDER_REGEX
+      line.split(/\s{2,}/).drop(1)
     end
   end
 end

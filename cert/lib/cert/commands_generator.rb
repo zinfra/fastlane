@@ -1,5 +1,10 @@
 require 'commander'
 require 'fastlane/version'
+require 'fastlane_core/configuration/configuration'
+require 'fastlane_core/globals'
+
+require_relative 'options'
+require_relative 'runner'
 
 HighLine.track_eof = false
 
@@ -17,10 +22,11 @@ module Cert
       program :description, 'CLI for \'cert\' - Create new iOS code signing certificates'
       program :help, 'Author', 'Felix Krause <cert@krausefx.com>'
       program :help, 'Website', 'https://fastlane.tools'
-      program :help, 'GitHub', 'https://github.com/fastlane/fastlane/tree/master/cert#readme'
+      program :help, 'Documentation', 'https://docs.fastlane.tools/actions/cert/'
       program :help_formatter, :compact
 
       global_option('--verbose') { FastlaneCore::Globals.verbose = true }
+      global_option('--env STRING[,STRING2]', String, 'Add environment(s) to use with `dotenv`')
 
       command :create do |c|
         c.syntax = 'fastlane cert create'
@@ -46,7 +52,7 @@ module Cert
         end
       end
 
-      default_command :create
+      default_command(:create)
 
       run!
     end

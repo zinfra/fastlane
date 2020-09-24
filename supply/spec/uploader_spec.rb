@@ -2,6 +2,78 @@ require 'fileutils'
 
 describe Supply do
   describe Supply::Uploader do
+    describe "#verify_config!" do
+      let(:subject) { Supply::Uploader.new }
+
+      it "raises error if empty config" do
+        Supply.config = {}
+        expect do
+          subject.verify_config!
+        end.to raise_error("No local metadata, apks, aab, or track to promote were found, make sure to run `fastlane supply init` to setup supply")
+      end
+
+      it "raises error if only track" do
+        Supply.config = {
+          track: 'alpha'
+        }
+        expect do
+          subject.verify_config!
+        end.to raise_error("No local metadata, apks, aab, or track to promote were found, make sure to run `fastlane supply init` to setup supply")
+      end
+
+      it "raises error if only track_promote_to" do
+        Supply.config = {
+          track_promote_to: 'beta'
+        }
+        expect do
+          subject.verify_config!
+        end.to raise_error("No local metadata, apks, aab, or track to promote were found, make sure to run `fastlane supply init` to setup supply")
+      end
+
+      it "does not raise error if only metadata" do
+        Supply.config = {
+          metadata_path: 'some/path'
+        }
+        subject.verify_config!
+      end
+
+      it "does not raise error if only apk" do
+        Supply.config = {
+          apk: 'some/path/app.apk'
+        }
+        subject.verify_config!
+      end
+
+      it "does not raise error if only apk_paths" do
+        Supply.config = {
+          apk_paths: ['some/path/app1.apk', 'some/path/app2.apk']
+        }
+        subject.verify_config!
+      end
+
+      it "does not raise error if only aab" do
+        Supply.config = {
+          aab: 'some/path/app1.aab'
+        }
+        subject.verify_config!
+      end
+
+      it "does not raise error if only aab_paths" do
+        Supply.config = {
+          aab_paths: ['some/path/app1.aab', 'some/path/app2.aab']
+        }
+        subject.verify_config!
+      end
+
+      it "does not raise error if only track and track_promote_to" do
+        Supply.config = {
+          track: 'alpha',
+          track_promote_to: 'beta'
+        }
+        subject.verify_config!
+      end
+    end
+
     describe "#find_obbs" do
       let(:subject) { Supply::Uploader.new }
 
@@ -20,7 +92,7 @@ describe Supply do
       end
 
       before do
-        FileUtils.rm_rf Dir.glob("#{@obb_dir}/*.obb")
+        FileUtils.rm_rf(Dir.glob("#{@obb_dir}/*.obb"))
       end
 
       def find_obbs
@@ -88,6 +160,58 @@ describe Supply do
 
         only_directories = Supply::Uploader.new.all_languages
         expect(only_directories).to eq(['en-US', 'fr-FR', 'ja-JP'])
+      end
+    end
+
+    describe 'promote_track' do
+      subject { Supply::Uploader.new.promote_track }
+
+      let(:client) { double('client') }
+      let(:version_codes) { [1, 2, 3] }
+      let(:config) { { track: 'alpha', track_promote_to: 'beta' } }
+      let(:track) { double('alpha') }
+      let(:release) { double('release1') }
+
+      before do
+        Supply.config = config
+        allow(Supply::Client).to receive(:make_from_config).and_return(client)
+        allow(client).to receive(:tracks).and_return([track])
+        allow(track).to receive(:releases).and_return([release])
+        allow(track).to receive(:releases=)
+
+        allow(client).to receive(:track_version_codes).and_return(version_codes)
+        allow(client).to receive(:update_track).with(config[:track], 0.1, nil)
+        allow(client).to receive(:update_track).with(config[:track_promote_to], 0.1, version_codes)
+
+        allow(release).to receive(:status).and_return(Supply::ReleaseStatus::COMPLETED)
+      end
+
+      it 'should only update track once' do
+        expect(release).to receive(:status=).with(Supply::ReleaseStatus::COMPLETED)
+        expect(release).to receive(:user_fraction=).with(nil)
+
+        expect(client).not_to(receive(:update_track).with(config[:track], anything))
+        expect(client).to receive(:update_track).with(config[:track_promote_to], track).once
+        subject
+      end
+    end
+
+    describe '#perform_upload' do
+      let(:client) { double('client') }
+      let(:config) { { apk: 'some/path/app.apk' } }
+
+      before do
+        Supply.config = config
+        allow(Supply::Client).to receive(:make_from_config).and_return(client)
+        allow(client).to receive(:upload_apk).with(config[:apk]).and_return(1) # newly uploaded version code
+        allow(client).to receive(:begin_edit).and_return(nil)
+        allow(client).to receive(:commit_current_edit!).and_return(nil)
+      end
+
+      it 'should update track with correct version codes' do
+        uploader = Supply::Uploader.new
+        expect(uploader).to receive(:update_track).with([1]).once
+        uploader.perform_upload
       end
     end
   end

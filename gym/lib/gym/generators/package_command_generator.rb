@@ -7,7 +7,7 @@
 require 'shellwords'
 
 # The concrete implementations
-require 'gym/generators/package_command_generator_xcode7'
+require_relative 'package_command_generator_xcode7'
 
 module Gym
   class PackageCommandGenerator
@@ -23,6 +23,10 @@ module Gym
       # The path in which the ipa file will be available after executing the command
       def ipa_path
         generator.ipa_path
+      end
+
+      def pkg_path
+        generator.pkg_path
       end
 
       def dsym_path
@@ -43,6 +47,14 @@ module Gym
 
       def apps_path
         generator.apps_path
+      end
+
+      def asset_packs_path
+        generator.asset_packs_path
+      end
+
+      def appstore_info_path
+        generator.appstore_info_path
       end
 
       # The generator we need to use for the currently used Xcode version
